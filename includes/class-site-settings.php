@@ -10,6 +10,7 @@ class WCD_MainWP_Site_Settings
         add_action('mainwp_site_updated', [self::class, 'saveOnUpdate'], 10, 2);
         add_action('mainwp_added_new_site', [self::class, 'saveOnAdd'], 10, 2);
         add_filter('mainwp_getsubpages_sites', [self::class, 'registerSiteTab']);
+        add_action('admin_post_wcd_take_screenshot', [self::class, 'handleTakeScreenshot']);
     }
 
     public static function registerSiteTab(array $subPages): array
@@ -28,6 +29,36 @@ class WCD_MainWP_Site_Settings
     public static function renderSiteTab(): void
     {
         include WCD_MAINWP_PLUGIN_PATH . 'templates/site-tab.php';
+    }
+
+    public static function handleTakeScreenshot(): void
+    {
+        check_admin_referer('wcd_take_screenshot');
+
+        $siteId  = isset($_POST['site_id']) ? (int) $_POST['site_id'] : 0;
+        $groupId = isset($_POST['group_id']) ? sanitize_text_field($_POST['group_id']) : '';
+        $scType  = isset($_POST['sc_type']) && $_POST['sc_type'] === 'post' ? 'post' : 'pre';
+        $apiKey  = self::get($siteId);
+
+        $returnUrl = add_query_arg(
+            ['page' => 'ManageSitesWcdVisualRegressionTesting', 'id' => $siteId],
+            admin_url('admin.php')
+        );
+
+        if (empty($apiKey) || empty($groupId)) {
+            wp_safe_redirect(add_query_arg('wcd_error', '1', $returnUrl));
+            exit;
+        }
+
+        $result = WCD_MainWP_API::takeScreenshot([$groupId], $scType, 'manual', $apiKey);
+
+        if (empty($result['batch'])) {
+            wp_safe_redirect(add_query_arg('wcd_error', '1', $returnUrl));
+            exit;
+        }
+
+        wp_safe_redirect(add_query_arg('wcd_success', $scType, $returnUrl));
+        exit;
     }
 
     public static function renderField(): void
