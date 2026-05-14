@@ -1,0 +1,12 @@
+{
+    "core": null,
+    "port": 8081,
+    "plugins": [
+        ".",
+        "https://downloads.wordpress.org/plugin/mainwp.latest-stable.zip"
+    ],
+    "testsEnvironment": false,
+    "config": {
+        "WCD_API_URL_V2": "http://host.docker.internal/api/v2/"
+    }
+}
