@@ -8,16 +8,21 @@ class WCD_MainWP_API
             $apiToken = (string) get_option('wcd_api_token');
         }
 
+        $args = [
+            'method'  => $method,
+            'headers' => [
+                'Authorization' => 'Bearer ' . $apiToken,
+                'Content-Type'  => 'application/json',
+            ],
+        ];
+
+        if ($method !== 'GET' && !empty($body)) {
+            $args['body'] = json_encode($body);
+        }
+
         $response = wp_remote_request(
             'https://api.webchangedetector.com/api/v2' . $endpoint,
-            [
-                'method' => $method,
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $apiToken,
-                    'Content-Type'  => 'application/json',
-                ],
-                'body' => json_encode($body),
-            ]
+            $args
         );
 
         return json_decode(
