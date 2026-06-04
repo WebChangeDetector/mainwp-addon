@@ -2,7 +2,16 @@
 
 class WCD_MainWP_API
 {
-    const API_URL = 'https://api.webchangedetector.com/api/v2';
+    const DEFAULT_API_URL = 'https://api.webchangedetector.com/api/v2';
+
+    protected static function getApiUrl(): string
+    {
+        if (defined('WCD_API_URL')) {
+            return rtrim(WCD_API_URL, '/');
+        }
+
+        return self::DEFAULT_API_URL;
+    }
 
     protected static function request(string $method, string $endpoint, array $body = [], string $apiToken = '', array $query = [])
     {
@@ -22,7 +31,7 @@ class WCD_MainWP_API
             $args['body'] = json_encode($body);
         }
 
-        $url = self::API_URL . $endpoint;
+        $url = self::getApiUrl() . $endpoint;
         if (!empty($query)) {
             $url = add_query_arg($query, $url);
         }
