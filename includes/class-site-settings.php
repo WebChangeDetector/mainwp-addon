@@ -2,21 +2,19 @@
 
 class WCD_MainWP_Site_Settings
 {
-    private const META_KEY = 'wcd_api_key';
+    private const OPTION_KEY = 'wcd_api_key';
 
     public static function init(): void
     {
-        add_action('mainwp_manage_sites_edit', [self::class, 'renderField']);
-        add_action('mainwp_site_updated', [self::class, 'saveOnUpdate'], 10, 2);
-        add_action('mainwp_added_new_site', [self::class, 'saveOnAdd'], 10, 2);
         add_filter('mainwp_getsubpages_sites', [self::class, 'registerSiteTab']);
+        add_action('admin_post_wcd_save_settings', [self::class, 'handleSaveSettings']);
         add_action('admin_post_wcd_take_screenshot', [self::class, 'handleTakeScreenshot']);
     }
 
     public static function registerSiteTab(array $subPages): array
     {
         $subPages[] = [
-            'title'       => 'Visual Regression Testing',
+            'title'       => 'Webchange Detector',
             'slug'        => 'WcdVisualRegressionTesting',
             'sitetab'     => true,
             'menu_hidden' => true,
@@ -61,50 +59,89 @@ class WCD_MainWP_Site_Settings
         exit;
     }
 
-    public static function renderField(): void
+    public static function handleSaveSettings(): void
     {
-        $websiteId = isset($_REQUEST['id']) ? (int) $_REQUEST['id'] : 0; // phpcs:ignore WordPress.Security.NonceVerification
-        $apiKey    = $websiteId ? self::get($websiteId) : '';
+        check_admin_referer('wcd_save_settings');
+
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Insufficient permissions.', 'webchangedetector'));
+        }
+
+        $apiKey = isset($_POST[self::OPTION_KEY]) ? sanitize_text_field($_POST[self::OPTION_KEY]) : '';
+        update_option(self::OPTION_KEY, $apiKey);
+
+        wp_safe_redirect(add_query_arg(
+            ['page' => 'Extensions-Mainwp-Addon', 'wcd_settings_saved' => '1'],
+            admin_url('admin.php')
+        ));
+        exit;
+    }
+
+    public static function renderSettingsForm(): void
+    {
+        $apiKey  = self::getGlobal();
+        $account = !empty($apiKey) ? WCD_MainWP_API::getAccount($apiKey) : null;
         ?>
-        <div class="ui grid field">
-            <label class="six wide column middle aligned">
-                <?php esc_html_e('WebChange Detector API Key', 'webchangedetector'); ?>
-            </label>
-            <div class="ten wide column">
-                <input type="text"
-                       name="<?php echo esc_attr(self::META_KEY); ?>"
-                       value="<?php echo esc_attr($apiKey); ?>"
-                       placeholder="<?php esc_attr_e('Enter WCD API key for this site', 'webchangedetector'); ?>" />
+        <?php if (isset($_GET['wcd_settings_saved'])) : // phpcs:ignore WordPress.Security.NonceVerification ?>
+            <div class="ui positive message">
+                <p><?php esc_html_e('Settings saved.', 'webchangedetector'); ?></p>
             </div>
+        <?php endif; ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('wcd_save_settings'); ?>
+            <input type="hidden" name="action" value="wcd_save_settings" />
+            <div class="ui form">
+                <div class="field">
+                    <label><?php esc_html_e('WebChange Detector API Key', 'webchangedetector'); ?></label>
+                    <input type="text"
+                           name="<?php echo esc_attr(self::OPTION_KEY); ?>"
+                           value="<?php echo esc_attr($apiKey); ?>"
+                           placeholder="<?php esc_attr_e('Enter your WCD API key', 'webchangedetector'); ?>" />
+                </div>
+                <button type="submit" class="ui primary button">
+                    <?php esc_html_e('Save Settings', 'webchangedetector'); ?>
+                </button>
+            </div>
+        </form>
+
+        <?php if (!empty($account['data'])) :
+            $data  = $account['data'];
+            $done  = (int) $data['checks_done'];
+            $left  = (int) $data['checks_left'];
+            $limit = (int) $data['checks_limit'];
+            $pct   = $limit > 0 ? round(($done / $limit) * 100) : 0;
+        ?>
+        <h3 class="ui header" style="margin-top:1.5em;"><?php esc_html_e('Account', 'webchangedetector'); ?></h3>
+        <table class="ui very basic celled table">
+            <tbody>
+                <tr><td><strong><?php esc_html_e('Name', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['name_first'] . ' ' . $data['name_last']); ?></td></tr>
+                <tr><td><strong><?php esc_html_e('Email', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['email']); ?></td></tr>
+                <tr><td><strong><?php esc_html_e('Plan', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['plan_name'] ?? '—'); ?></td></tr>
+                <tr><td><strong><?php esc_html_e('Status', 'webchangedetector'); ?></strong></td><td><?php echo esc_html(ucfirst($data['status'])); ?></td></tr>
+                <tr><td><strong><?php esc_html_e('Renewal', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['renewal_at'] ?? '—'); ?></td></tr>
+            </tbody>
+        </table>
+
+        <h3 class="ui header" style="margin-top:1.5em;"><?php esc_html_e('Check Credits', 'webchangedetector'); ?></h3>
+        <div class="ui indicating progress" data-percent="<?php echo esc_attr($pct); ?>">
+            <div class="bar" style="width:<?php echo esc_attr($pct); ?>%;"></div>
         </div>
+        <p><?php echo esc_html($done); ?> used &nbsp;·&nbsp; <?php echo esc_html($left); ?> remaining &nbsp;·&nbsp; <?php echo esc_html($limit); ?> total</p>
+        <?php elseif (!empty($apiKey)) : ?>
+            <div class="ui warning message">
+                <p><?php esc_html_e('Could not retrieve account data. Please check your API key.', 'webchangedetector'); ?></p>
+            </div>
+        <?php endif; ?>
         <?php
-    }
-
-    public static function saveOnUpdate(object $website, array $post): void
-    {
-        if (!isset($post[self::META_KEY])) {
-            return;
-        }
-
-        self::save($website->id, sanitize_text_field($post[self::META_KEY]));
-    }
-
-    public static function saveOnAdd(int $siteId, object $website): void
-    {
-        if (!isset($_POST[self::META_KEY])) { // phpcs:ignore WordPress.Security.NonceVerification
-            return;
-        }
-
-        self::save($siteId, sanitize_text_field($_POST[self::META_KEY])); // phpcs:ignore WordPress.Security.NonceVerification
     }
 
     public static function get(int $siteId): string
     {
-        return (string) get_option('wcd_site_' . self::META_KEY . '_' . $siteId, '');
+        return self::getGlobal();
     }
 
-    private static function save(int $siteId, string $value): void
+    public static function getGlobal(): string
     {
-        update_option('wcd_site_' . self::META_KEY . '_' . $siteId, $value);
+        return (string) get_option(self::OPTION_KEY, '');
     }
 }
