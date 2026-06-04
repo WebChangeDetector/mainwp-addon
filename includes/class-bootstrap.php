@@ -6,6 +6,7 @@ class WCD_MainWP_Bootstrap
     {
         require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-api.php';
         require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-site-settings.php';
+        require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-widget.php';
 
         add_action('plugins_loaded', [self::class, 'setup']);
     }
@@ -19,7 +20,25 @@ class WCD_MainWP_Bootstrap
             );
 
             WCD_MainWP_Site_Settings::init();
+
+            add_filter(
+                'mainwp_getmetaboxes',
+                [self::class, 'registerWidget']
+            );
         }
+    }
+
+    public static function registerWidget(array $metaboxes): array
+    {
+        $metaboxes[] = [
+            'id'            => 'wcd-checks-widget',
+            'plugin'        => WCD_MAINWP_PLUGIN_PATH . 'webchangedetector-mainwp.php',
+            'key'           => 'wcd_checks_widget',
+            'metabox_title' => 'WebChange Detector',
+            'callback'      => ['WCD_MainWP_Widget', 'renderMetabox'],
+        ];
+
+        return $metaboxes;
     }
 
     public static function register_extension($extensions)
