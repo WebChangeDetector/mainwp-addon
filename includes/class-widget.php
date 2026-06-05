@@ -1,28 +1,29 @@
 <?php
+/**
+ * Dashboard widget showing the connected account's plan + check credits.
+ *
+ * @package WebChangeDetector_MainWP
+ */
+
+defined('ABSPATH') || exit;
 
 class WCD_MainWP_Widget
 {
     public static function renderMetabox(): void
     {
-        self::renderGlobalWidget();
-    }
+        $token   = WCD_MainWP_Site_Settings::getGlobal();
+        $account = [];
+        $error   = '';
 
-    private static function renderGlobalWidget(): void
-    {
-        $apiKey  = WCD_MainWP_Site_Settings::getGlobal();
-        $account = null;
-        $error   = null;
-
-        if (empty($apiKey)) {
-            $error = __('No WebChange Detector API key configured. Please add one in the extension settings.', 'webchangedetector');
+        if ('' === $token) {
+            $error = __('No API token configured. Add one in the WebChange Detector settings.', 'webchangedetector');
         } else {
-            $account = WCD_MainWP_API::getAccount($apiKey);
-            if (empty($account['data'])) {
-                $error = __('Could not retrieve account data. Please check the API key.', 'webchangedetector');
+            $account = WCD_MainWP_Site_Settings::getAccount();
+            if (empty($account)) {
+                $error = __('Could not retrieve account data. Please check the API token.', 'webchangedetector');
             }
         }
 
         include WCD_MAINWP_PLUGIN_PATH . 'templates/widget.php';
     }
-
 }

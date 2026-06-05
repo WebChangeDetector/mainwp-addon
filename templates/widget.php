@@ -1,4 +1,15 @@
-<?php defined('ABSPATH') || exit; ?>
+<?php
+/**
+ * Dashboard widget body: plan + check credits.
+ *
+ * @var array  $account Unwrapped account details (empty on error).
+ * @var string $error   Error message (empty on success).
+ *
+ * @package WebChangeDetector_MainWP
+ */
+
+defined('ABSPATH') || exit;
+?>
 
 <div class="ui grid mainwp-widget-header">
     <div class="twelve wide column">
@@ -9,35 +20,22 @@
     </div>
 </div>
 
-<div class="mainwp-scrolly-overflow">
+<div class="mainwp-scrolly-overflow wcd-widget">
 <?php if ($error) : ?>
-    <p style="color:#c00;"><?php echo esc_html($error); ?></p>
+    <p class="wcd-error"><?php echo esc_html($error); ?></p>
 <?php else :
-    $data  = $account['data'];
-    $done  = (int) $data['checks_done'];
-    $left  = (int) $data['checks_left'];
-    $limit = (int) $data['checks_limit'];
-    $pct   = $limit > 0 ? round(($done / $limit) * 100) : 0;
-?>
-    <div style="margin-bottom:8px;">
-        <div style="background:#e0e0e0;border-radius:4px;overflow:hidden;height:12px;">
-            <div style="background:#2271b1;width:<?php echo esc_attr($pct); ?>%;height:100%;border-radius:4px;transition:width .3s;"></div>
-        </div>
-    </div>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <tr>
-            <td style="padding:3px 0;color:#555;"><?php esc_html_e('Used', 'webchangedetector'); ?></td>
-            <td style="padding:3px 0;text-align:right;font-weight:600;"><?php echo esc_html(number_format_i18n($done)); ?></td>
-        </tr>
-        <tr>
-            <td style="padding:3px 0;color:#555;"><?php esc_html_e('Remaining', 'webchangedetector'); ?></td>
-            <td style="padding:3px 0;text-align:right;font-weight:600;"><?php echo esc_html(number_format_i18n($left)); ?></td>
-        </tr>
-        <tr>
-            <td style="padding:3px 0;color:#555;"><?php esc_html_e('Total', 'webchangedetector'); ?></td>
-            <td style="padding:3px 0;text-align:right;font-weight:600;"><?php echo esc_html(number_format_i18n($limit)); ?></td>
-        </tr>
+    $done  = (int) ($account['checks_done'] ?? 0);
+    $left  = (int) ($account['checks_left'] ?? 0);
+    $limit = (int) ($account['checks_limit'] ?? 0);
+    $pct   = $limit > 0 ? (int) round(($done / $limit) * 100) : 0;
+    $step  = (int) (round($pct / 5) * 5);
+    ?>
+    <div class="wcd-progress"><div class="wcd-progress-bar wcd-w-<?php echo esc_attr((string) $step); ?>"></div></div>
+    <table class="wcd-widget-table">
+        <tr><td><?php esc_html_e('Used', 'webchangedetector'); ?></td><td><?php echo esc_html(number_format_i18n($done)); ?></td></tr>
+        <tr><td><?php esc_html_e('Remaining', 'webchangedetector'); ?></td><td><?php echo esc_html(number_format_i18n($left)); ?></td></tr>
+        <tr><td><?php esc_html_e('Total', 'webchangedetector'); ?></td><td><?php echo esc_html(number_format_i18n($limit)); ?></td></tr>
     </table>
-    <p style="margin:8px 0 0;font-size:12px;color:#888;"><?php echo esc_html($pct); ?>% <?php esc_html_e('used', 'webchangedetector'); ?></p>
+    <p class="wcd-muted"><?php echo esc_html((string) $pct); ?>% <?php esc_html_e('used', 'webchangedetector'); ?></p>
 <?php endif; ?>
 </div>

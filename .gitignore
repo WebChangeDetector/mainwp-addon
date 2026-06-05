@@ -35,6 +35,11 @@ wp-config.php
 # htaccess
 /.htaccess
 
+# Local-only wp-env override (machine-specific API URL, never committed).
+# The committed .wp-env.json carries no API override, so the plugin defaults to
+# the production API (api.webchangedetector.com). Put your local API URL here.
+.wp-env.override.json
+
 # All plugins
 #
 # Note: If you wish to whitelist plugins,

@@ -1,20 +1,33 @@
 <?php
+/**
+ * Settings storage, token verification and the extension settings page.
+ *
+ * Owns the single dashboard-level API token (`wcd_api_token`) and the cached account details.
+ * The settings page renders the design's layout: account/credits card + per-site cards with
+ * URL configuration. All site/URL mutations happen via AJAX (see WCD_MainWP_Ajax).
+ *
+ * @package WebChangeDetector_MainWP
+ */
+
+defined('ABSPATH') || exit;
 
 class WCD_MainWP_Site_Settings
 {
-    private const OPTION_KEY = 'wcd_api_key';
+    const OPTION_KEY     = 'wcd_api_token';
+    const ACCOUNT_CACHE  = 'wcd_account_details';
+    const ERROR_CACHE    = 'wcd_token_error';
+    const ACCOUNT_TTL    = 300; // 5 minutes.
 
     public static function init(): void
     {
         add_filter('mainwp_getsubpages_sites', [self::class, 'registerSiteTab']);
         add_action('admin_post_wcd_save_settings', [self::class, 'handleSaveSettings']);
-        add_action('admin_post_wcd_take_screenshot', [self::class, 'handleTakeScreenshot']);
     }
 
     public static function registerSiteTab(array $subPages): array
     {
         $subPages[] = [
-            'title'       => 'Webchange Detector',
+            'title'       => 'WebChange Detector',
             'slug'        => 'WcdVisualRegressionTesting',
             'sitetab'     => true,
             'menu_hidden' => true,
@@ -29,119 +42,113 @@ class WCD_MainWP_Site_Settings
         include WCD_MAINWP_PLUGIN_PATH . 'templates/site-tab.php';
     }
 
-    public static function handleTakeScreenshot(): void
+    /* ─────────────────────────── Token storage ─────────────────────────── */
+
+    public static function getGlobal(): string
     {
-        check_admin_referer('wcd_take_screenshot');
-
-        $siteId  = isset($_POST['site_id']) ? (int) $_POST['site_id'] : 0;
-        $groupId = isset($_POST['group_id']) ? sanitize_text_field($_POST['group_id']) : '';
-        $scType  = isset($_POST['sc_type']) && $_POST['sc_type'] === 'post' ? 'post' : 'pre';
-        $apiKey  = self::get($siteId);
-
-        $returnUrl = add_query_arg(
-            ['page' => 'ManageSitesWcdVisualRegressionTesting', 'id' => $siteId],
-            admin_url('admin.php')
-        );
-
-        if (empty($apiKey) || empty($groupId)) {
-            wp_safe_redirect(add_query_arg('wcd_error', '1', $returnUrl));
-            exit;
-        }
-
-        $result = WCD_MainWP_API::takeScreenshot([$groupId], $scType, 'manual', $apiKey);
-
-        if (empty($result['batch'])) {
-            wp_safe_redirect(add_query_arg('wcd_error', '1', $returnUrl));
-            exit;
-        }
-
-        wp_safe_redirect(add_query_arg('wcd_success', $scType, $returnUrl));
-        exit;
+        return (string) WCD_MainWP_Options::get(self::OPTION_KEY, '');
     }
+
+    /**
+     * Verify a token by calling /account. On success, caches the account; returns the result.
+     *
+     * @return array{ok: bool, account: array, error: string}
+     */
+    public static function verifyToken(string $token): array
+    {
+        $response = WCD_MainWP_API::getAccount($token);
+
+        if (! $response['ok'] || empty($response['data'])) {
+            $error = $response['error'] ?: __('Could not retrieve account data.', 'webchangedetector');
+            if (! empty($response['status'])) {
+                $error .= ' (HTTP ' . (int) $response['status'] . ')';
+            }
+
+            return ['ok' => false, 'account' => [], 'error' => $error];
+        }
+
+        $account = self::unwrap($response['data']);
+        WCD_MainWP_Options::setTransient(self::ACCOUNT_CACHE, $account, self::ACCOUNT_TTL);
+
+        return ['ok' => true, 'account' => $account, 'error' => ''];
+    }
+
+    /**
+     * Return the cached account, fetching + verifying once if needed.
+     */
+    public static function getAccount(bool $force = false): array
+    {
+        if (! $force) {
+            $cached = WCD_MainWP_Options::getTransient(self::ACCOUNT_CACHE);
+            if (is_array($cached) && ! empty($cached)) {
+                return $cached;
+            }
+        }
+
+        $token = self::getGlobal();
+        if ('' === $token) {
+            return [];
+        }
+
+        $result = self::verifyToken($token);
+
+        return $result['ok'] ? $result['account'] : [];
+    }
+
+    /**
+     * Unwrap a { data: {...} } envelope.
+     */
+    protected static function unwrap($data): array
+    {
+        if (is_array($data) && isset($data['data']) && is_array($data['data'])) {
+            return $data['data'];
+        }
+
+        return is_array($data) ? $data : [];
+    }
+
+    /* ──────────────────────────── Save handler ─────────────────────────── */
 
     public static function handleSaveSettings(): void
     {
         check_admin_referer('wcd_save_settings');
 
-        if (!current_user_can('manage_options')) {
+        if (! current_user_can('manage_options')) {
             wp_die(esc_html__('Insufficient permissions.', 'webchangedetector'));
         }
 
-        $apiKey = isset($_POST[self::OPTION_KEY]) ? sanitize_text_field($_POST[self::OPTION_KEY]) : '';
-        update_option(self::OPTION_KEY, $apiKey);
+        $token = isset($_POST[self::OPTION_KEY]) ? sanitize_text_field(wp_unslash($_POST[self::OPTION_KEY])) : '';
+        WCD_MainWP_Options::set(self::OPTION_KEY, $token);
+        WCD_MainWP_Options::deleteTransient(self::ACCOUNT_CACHE);
+
+        $flag = '1';
+        if ('' !== $token) {
+            $verify = self::verifyToken($token);
+            $flag   = $verify['ok'] ? '1' : '0';
+            if (! $verify['ok']) {
+                // Surface the exact reason (HTTP status / SSL / API message) on the settings page.
+                WCD_MainWP_Options::setTransient(self::ERROR_CACHE, $verify['error'], 120);
+            } else {
+                WCD_MainWP_Options::deleteTransient(self::ERROR_CACHE);
+            }
+        }
 
         wp_safe_redirect(add_query_arg(
-            ['page' => 'Extensions-Mainwp-Addon', 'wcd_settings_saved' => '1'],
+            ['page' => WCD_MainWP_Bootstrap::settingsPageSlug(), 'wcd_token_verified' => $flag],
             admin_url('admin.php')
         ));
         exit;
     }
 
+    /* ──────────────────────────── Settings page ────────────────────────── */
+
     public static function renderSettingsForm(): void
     {
-        $apiKey  = self::getGlobal();
-        $account = !empty($apiKey) ? WCD_MainWP_API::getAccount($apiKey) : null;
-        ?>
-        <?php if (isset($_GET['wcd_settings_saved'])) : // phpcs:ignore WordPress.Security.NonceVerification ?>
-            <div class="ui positive message">
-                <p><?php esc_html_e('Settings saved.', 'webchangedetector'); ?></p>
-            </div>
-        <?php endif; ?>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-            <?php wp_nonce_field('wcd_save_settings'); ?>
-            <input type="hidden" name="action" value="wcd_save_settings" />
-            <div class="ui form">
-                <div class="field">
-                    <label><?php esc_html_e('WebChange Detector API Key', 'webchangedetector'); ?></label>
-                    <input type="text"
-                           name="<?php echo esc_attr(self::OPTION_KEY); ?>"
-                           value="<?php echo esc_attr($apiKey); ?>"
-                           placeholder="<?php esc_attr_e('Enter your WCD API key', 'webchangedetector'); ?>" />
-                </div>
-                <button type="submit" class="ui primary button">
-                    <?php esc_html_e('Save Settings', 'webchangedetector'); ?>
-                </button>
-            </div>
-        </form>
+        $token   = self::getGlobal();
+        $account = '' !== $token ? self::getAccount() : [];
+        $sites   = WCD_MainWP_Site_Map::managedSites();
+        $map     = WCD_MainWP_Site_Map::all();
 
-        <?php if (!empty($account['data'])) :
-            $data  = $account['data'];
-            $done  = (int) $data['checks_done'];
-            $left  = (int) $data['checks_left'];
-            $limit = (int) $data['checks_limit'];
-            $pct   = $limit > 0 ? round(($done / $limit) * 100) : 0;
-        ?>
-        <h3 class="ui header" style="margin-top:1.5em;"><?php esc_html_e('Account', 'webchangedetector'); ?></h3>
-        <table class="ui very basic celled table">
-            <tbody>
-                <tr><td><strong><?php esc_html_e('Name', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['name_first'] . ' ' . $data['name_last']); ?></td></tr>
-                <tr><td><strong><?php esc_html_e('Email', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['email']); ?></td></tr>
-                <tr><td><strong><?php esc_html_e('Plan', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['plan_name'] ?? '—'); ?></td></tr>
-                <tr><td><strong><?php esc_html_e('Status', 'webchangedetector'); ?></strong></td><td><?php echo esc_html(ucfirst($data['status'])); ?></td></tr>
-                <tr><td><strong><?php esc_html_e('Renewal', 'webchangedetector'); ?></strong></td><td><?php echo esc_html($data['renewal_at'] ?? '—'); ?></td></tr>
-            </tbody>
-        </table>
-
-        <h3 class="ui header" style="margin-top:1.5em;"><?php esc_html_e('Check Credits', 'webchangedetector'); ?></h3>
-        <div class="ui indicating progress" data-percent="<?php echo esc_attr($pct); ?>">
-            <div class="bar" style="width:<?php echo esc_attr($pct); ?>%;"></div>
-        </div>
-        <p><?php echo esc_html($done); ?> used &nbsp;·&nbsp; <?php echo esc_html($left); ?> remaining &nbsp;·&nbsp; <?php echo esc_html($limit); ?> total</p>
-        <?php elseif (!empty($apiKey)) : ?>
-            <div class="ui warning message">
-                <p><?php esc_html_e('Could not retrieve account data. Please check your API key.', 'webchangedetector'); ?></p>
-            </div>
-        <?php endif; ?>
-        <?php
-    }
-
-    public static function get(int $siteId): string
-    {
-        return self::getGlobal();
-    }
-
-    public static function getGlobal(): string
-    {
-        return (string) get_option(self::OPTION_KEY, '');
+        include WCD_MAINWP_PLUGIN_PATH . 'templates/settings-page.php';
     }
 }

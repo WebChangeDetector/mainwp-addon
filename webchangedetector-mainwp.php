@@ -1,7 +1,7 @@
 <?php
 /**
- * Plugin Name: WebChange Detector
- * Description: Visual Regression Testing
+ * Plugin Name: WebChange Detector for MainWP - Visual Regression Testing for WP Updates
+ * Description: Visual regression testing for MainWP: capture before/after screenshots around your updates and instantly see what changed.
  * Version: 0.1.0
  * Author: WebChange Detector
  * Documentation URI: https://api.webchangedetector.com/docs/
@@ -11,6 +11,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+define('WCD_MAINWP_VERSION', '0.1.0');
+define('WCD_MAINWP_PLUGIN_FILE', __FILE__);
 define('WCD_MAINWP_PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('WCD_MAINWP_PLUGIN_URL', plugin_dir_url(__FILE__));
 
