@@ -51,6 +51,13 @@ $used_pct     = ($checks_limit && $checks_limit > 0) ? min(100, round(($checks_d
                    value="<?php echo esc_attr($token); ?>"
                    placeholder="<?php esc_attr_e('Enter your WCD API token', 'webchangedetector'); ?>" />
         </div>
+        <div class="field">
+            <div class="ui checkbox">
+                <input type="checkbox" id="wcd_auto_enable_sites" name="<?php echo esc_attr(WCD_MainWP_Site_Settings::AUTO_ENABLE_KEY); ?>" value="1" <?php checked(WCD_MainWP_Site_Settings::autoEnableNewSites()); ?> />
+                <label for="wcd_auto_enable_sites"><?php esc_html_e('Auto-enable new sites', 'webchangedetector'); ?></label>
+            </div>
+            <p class="wcd-muted"><?php esc_html_e('When you add a site in MainWP, enable it for visual checks and sync its URLs automatically. Each enabled site provisions WebChange Detector resources that count against your plan.', 'webchangedetector'); ?></p>
+        </div>
         <button type="submit" class="ui primary button"><?php esc_html_e('Save & verify', 'webchangedetector'); ?></button>
     </div>
 </form>

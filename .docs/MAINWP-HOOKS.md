@@ -26,12 +26,14 @@ the user to run the native update; the after-update hook still drives the post s
 | Hook | Type | Args | Used for |
 |------|------|------|----------|
 | `mainwp_getextensions` | filter | `$extensions` | Register the extension + settings page callback + icon |
-| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) |
+| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) + the dashboard "Change Detections" page (`WcdChangeDetections`, `sitetab => false`) |
 | `mainwp_getmetaboxes` | filter | `$metaboxes` | Dashboard widget (account/credits) |
 | `mainwp_getdbsites` | filter | `$pluginFile, $key, $sites, $groups, $options, $clients` | List managed child sites (id, url, name) |
 | `mainwp_site_synced` | action | `$pWebsite, $information` | After a child site syncs -> sync its URLs to the WCD group |
+| `mainwp_added_new_site` | action | `$id, $website` | Auto-enable a newly added child site for WCD (provision website/groups + URL sync), when the "Auto-enable new sites" setting is on. Best-effort: errors are swallowed so MainWP's add-site never breaks |
 | `mainwp_getallposts` | filter/hook | `$data` (search params) | Fetch a child's posts (hooks-first; pages use the sanctioned call) |
 | `mainwp_before_overview_widgets` | action | `$context` | Inject the WCD hero banner at the top of the dashboard body. Fires with `'dashboard'` on BOTH the Operations dashboard and an individual child-site overview (both go through `MainWP_Overview::render_dashboard_body`); scope is detected via `MainWP_System_Utility::get_current_wpid()` (a site id => single-site, else bulk) |
+| `mainwp_updates_before_plugin_updates` | action | `$websites, $total_plugin_upgrades, ...` | Render the same hero banner above the native Updates page's plugin list, only when `$total_plugin_upgrades > 0`. Same scope detection as the dashboard banner |
 | `mainwp_after_wp_update` | action | `$information, $site` | Once per site after a core update -> post screenshots (recovery / non-card coverage) |
 | `mainwp_after_plugin_theme_translation_update` | action | `$information, $type, $slugs, $site` | Once per type after plugin/theme/translation update -> post screenshots |
 | `mainwp_pageheader_extensions` / `mainwp_pagefooter_extensions` | action | plugin file | MainWP chrome around the settings page |
@@ -57,3 +59,17 @@ the user to run the native update; the after-update hook still drives the post s
   An empty `updated[]` means "nothing pending" (success, no post needed), not a failure. Offline sites
   appear in `errors[]` (`mainwp_site_offline`). Do NOT use `execute_run_updates` for a single site:
   above `BATCH_THRESHOLD` (200) it queues and returns an async job instead of results.
+
+## Reads (not "calls"): MainWP DB upgrade columns
+
+`MainWP_DB::instance()->get_website_by_id($id)` is read (never written) to get a site's pending-update
+**count** (banner copy) and **item list** (the preflight "what gets updated" panel), parsing the
+`wp_upgrades` / `plugin_upgrades` / `theme_upgrades` / `translation_upgrades` JSON columns. Best-effort:
+degrades to `null` / `[]` when the DB layer is unavailable. This is read-only and not an update trigger,
+so it is not part of the two sanctioned write-side internal calls above.
+
+## Note: the AJAX `poll` aggregates multiple batches
+
+The unified in-card run runs all of a phase's sites at once, so `poll` accepts `batches[]` (single
+`batch` still supported) and sums the queues endpoint's `meta.status_counts_by_batch` into one
+aggregate, plus a `by_batch` breakdown for the per-site counters. No new MainWP hook is involved.

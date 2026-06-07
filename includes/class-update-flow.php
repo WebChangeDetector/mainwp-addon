@@ -163,27 +163,6 @@ class WCD_MainWP_Update_Flow
     /* ─────────────────────────────── Preflight ─────────────────────────── */
 
     /**
-     * Count the checks one run over the given groups will consume:
-     * sum over URLs of (desktop?1:0)+(mobile?1:0).
-     */
-    public static function checksForGroup(string $groupId, string $apiToken = ''): int
-    {
-        $response = WCD_MainWP_API::getGroupUrls($groupId, $apiToken, ['per_page' => 1000]);
-        if (! $response['ok']) {
-            return 0;
-        }
-
-        $urls  = self::extractUrls($response['data']);
-        $count = 0;
-        foreach ($urls as $url) {
-            $count += ! empty($url['desktop']) ? 1 : 0;
-            $count += ! empty($url['mobile']) ? 1 : 0;
-        }
-
-        return $count;
-    }
-
-    /**
      * Normalize a group-urls response into a flat list of url arrays.
      */
     public static function extractUrls($data): array
@@ -231,26 +210,80 @@ class WCD_MainWP_Update_Flow
 
     /**
      * Count one site's pending updates: WordPress core (0/1) + plugins + themes + translations.
+     * Derived from the parsed item list so the count and the preflight "what gets updated" list
+     * always agree.
      *
      * @param object $website MainWP website row.
      */
     protected static function countSiteUpgrades($website): int
     {
-        $count = 0;
+        return count(self::itemsFromWebsite($website));
+    }
+
+    /**
+     * List one site's pending update items for the preflight "what gets updated" panel. Best-effort
+     * (mirrors {@see pendingUpdatesCount}): returns [] when MainWP's DB layer is unavailable, and the
+     * item list is approximate (it does not subtract ignored/dismissed updates).
+     *
+     * @param int $siteId MainWP site id.
+     *
+     * @return array<int, array{kind: string, name: string, version: string}>
+     */
+    public static function updateItemsForSite(int $siteId): array
+    {
+        $db = '\\MainWP\\Dashboard\\MainWP_DB';
+        if (! class_exists($db) || ! method_exists($db, 'instance')) {
+            return [];
+        }
+
+        $website = $db::instance()->get_website_by_id($siteId);
+
+        return empty($website) ? [] : self::itemsFromWebsite($website);
+    }
+
+    /**
+     * Parse a MainWP website row's upgrade columns into a flat item list:
+     * WordPress core (0/1) + plugins + themes + translations.
+     *
+     * @param object $website MainWP website row.
+     *
+     * @return array<int, array{kind: string, name: string, version: string}>
+     */
+    protected static function itemsFromWebsite($website): array
+    {
+        $items = [];
 
         $core = ! empty($website->wp_upgrades) ? json_decode($website->wp_upgrades, true) : [];
         if (is_array($core) && ! empty($core)) {
-            $count++;
+            $items[] = [
+                'kind'    => 'core',
+                'name'    => 'WordPress',
+                'version' => (string) ($core['new'] ?? ($core['new_version'] ?? '')),
+            ];
         }
 
-        foreach (['plugin_upgrades', 'theme_upgrades', 'translation_upgrades'] as $field) {
+        $map = [
+            'plugin_upgrades'      => 'plugin',
+            'theme_upgrades'       => 'theme',
+            'translation_upgrades' => 'translation',
+        ];
+        foreach ($map as $field => $kind) {
             $raw     = isset($website->$field) ? $website->$field : '';
             $decoded = ! empty($raw) ? json_decode($raw, true) : [];
-            if (is_array($decoded)) {
-                $count += count($decoded);
+            if (! is_array($decoded)) {
+                continue;
+            }
+            foreach ($decoded as $slug => $entry) {
+                $entry    = is_array($entry) ? $entry : [];
+                $update   = isset($entry['update']) && is_array($entry['update']) ? $entry['update'] : [];
+                $items[]  = [
+                    'kind'    => $kind,
+                    'name'    => (string) ($entry['Name'] ?? ($entry['name'] ?? (is_string($slug) ? $slug : ''))),
+                    'version' => (string) ($update['new_version'] ?? ($entry['new_version'] ?? ($entry['version'] ?? ''))),
+                ];
             }
         }
 
-        return $count;
+        return $items;
     }
 }

@@ -314,6 +314,16 @@ class WCD_MainWP_API
     }
 
     /**
+     * List batches (runs). Accepts the same filters the webapp uses:
+     * [ 'page', 'per_page', 'from', 'to' (Y-m-d), 'source' (manual|monitoring|auto_update),
+     *   'status' ('new,ok,to_fix,false_positive'), 'group_ids' (csv), 'above_threshold' (bool) ].
+     */
+    public static function listBatches(array $filters = [], string $apiToken = ''): array
+    {
+        return self::request('GET', '/batches', [], $apiToken, $filters);
+    }
+
+    /**
      * Update a comparison status: 'ok' | 'to_fix' | 'false_positive'.
      */
     public static function updateComparison(string $id, string $status, string $apiToken = ''): array

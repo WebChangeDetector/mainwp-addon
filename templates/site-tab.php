@@ -42,13 +42,22 @@ $settings  = esc_url(admin_url('admin.php?page=' . WCD_MainWP_Bootstrap::setting
                 ?>
             </p>
         </div>
-    <?php else : ?>
+    <?php else :
+        $updates_count = WCD_MainWP_Update_Flow::pendingUpdatesCount([$site_id]);
+        $no_updates    = (null !== $updates_count && 0 === (int) $updates_count);
+        ?>
         <p class="wcd-muted"><?php esc_html_e('Run a safe update for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector'); ?></p>
-        <button type="button" class="ui green button wcd-safe-update" data-scope="site" data-site-id="<?php echo esc_attr((string) $site_id); ?>">
+        <button type="button" class="ui green button wcd-safe-update<?php echo $no_updates ? ' disabled' : ''; ?>" data-scope="site" data-site-id="<?php echo esc_attr((string) $site_id); ?>" <?php disabled($no_updates); ?>>
             <i class="eye icon"></i> <?php esc_html_e('On-Demand Safe Update', 'webchangedetector'); ?>
         </button>
         <a href="<?php echo $settings; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_url above. ?>" class="ui button"><?php esc_html_e('Configure URLs', 'webchangedetector'); ?></a>
+        <?php if ($no_updates) : ?>
+            <p class="wcd-muted wcd-mt"><?php esc_html_e('No updates available for this site right now.', 'webchangedetector'); ?></p>
+        <?php endif; ?>
     <?php endif; ?>
 </div>
+
+<?php // The unified in-card run renders here (this tab's safe-update button has no hero banner). ?>
+<div class="wcd-run-host"></div>
 
 <?php do_action('mainwp_pagefooter_sites', 'WcdVisualRegressionTesting'); ?>

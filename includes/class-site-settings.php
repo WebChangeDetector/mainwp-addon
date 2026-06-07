@@ -13,15 +13,18 @@ defined('ABSPATH') || exit;
 
 class WCD_MainWP_Site_Settings
 {
-    const OPTION_KEY     = 'wcd_api_token';
-    const ACCOUNT_CACHE  = 'wcd_account_details';
-    const ERROR_CACHE    = 'wcd_token_error';
-    const ACCOUNT_TTL    = 300; // 5 minutes.
+    const OPTION_KEY      = 'wcd_api_token';
+    const ACCOUNT_CACHE   = 'wcd_account_details';
+    const ERROR_CACHE     = 'wcd_token_error';
+    const ACCOUNT_TTL     = 300; // 5 minutes.
+    const AUTO_ENABLE_KEY = 'wcd_auto_enable_sites';
 
     public static function init(): void
     {
         add_filter('mainwp_getsubpages_sites', [self::class, 'registerSiteTab']);
         add_action('admin_post_wcd_save_settings', [self::class, 'handleSaveSettings']);
+        // Auto-enable newly added MainWP child sites for WCD (opt-out via the settings toggle).
+        add_action('mainwp_added_new_site', [self::class, 'onSiteAdded'], 10, 2);
     }
 
     public static function registerSiteTab(array $subPages): array
@@ -47,6 +50,47 @@ class WCD_MainWP_Site_Settings
     public static function getGlobal(): string
     {
         return (string) WCD_MainWP_Options::get(self::OPTION_KEY, '');
+    }
+
+    /**
+     * Whether newly added MainWP sites are auto-enabled for WCD. Defaults to ON until the user saves
+     * the settings form (an unchecked box then persists '0').
+     */
+    public static function autoEnableNewSites(): bool
+    {
+        return '0' !== (string) WCD_MainWP_Options::get(self::AUTO_ENABLE_KEY, '1');
+    }
+
+    /**
+     * Auto-enable a freshly added MainWP child site: provision its WCD website + groups, then sync
+     * its URLs best-effort. Gated by the settings toggle + a configured token. Never throws into
+     * MainWP's add-site flow if the WCD API is unavailable.
+     *
+     * @param int   $id      MainWP site id.
+     * @param mixed $website MainWP website row (unused).
+     */
+    public static function onSiteAdded($id, $website = null): void
+    {
+        $siteId = (int) $id;
+        if ($siteId <= 0 || ! self::autoEnableNewSites()) {
+            return;
+        }
+
+        $token = self::getGlobal();
+        if ('' === $token) {
+            return;
+        }
+
+        try {
+            $result = WCD_MainWP_Site_Map::enableSite($siteId, $token);
+            if (! empty($result['ok'])) {
+                // URLs also sync via mainwp_site_synced once the child finishes syncing; this is a
+                // best-effort head start for content that already exists.
+                WCD_MainWP_Url_Sync::syncSite($siteId, $token);
+            }
+        } catch (\Throwable $e) {
+            // Swallow: a WCD API/SSL failure must not break MainWP adding the site.
+        }
     }
 
     /**
@@ -120,6 +164,9 @@ class WCD_MainWP_Site_Settings
         $token = isset($_POST[self::OPTION_KEY]) ? sanitize_text_field(wp_unslash($_POST[self::OPTION_KEY])) : '';
         WCD_MainWP_Options::set(self::OPTION_KEY, $token);
         WCD_MainWP_Options::deleteTransient(self::ACCOUNT_CACHE);
+
+        // Auto-enable toggle (checkbox: absent in POST means unchecked = off).
+        WCD_MainWP_Options::set(self::AUTO_ENABLE_KEY, isset($_POST[self::AUTO_ENABLE_KEY]) ? '1' : '0');
 
         $flag = '1';
         if ('' !== $token) {

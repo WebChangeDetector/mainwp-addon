@@ -30,6 +30,8 @@ class WCD_MainWP_Ajax
             'poll',
             'results',
             'mark_comparison',
+            'runs_render',
+            'runs_comparisons',
         ];
 
         foreach ($actions as $action) {
@@ -213,32 +215,76 @@ class WCD_MainWP_Ajax
         $scope = self::scopeSiteIds();
         $token = self::token();
 
-        $sites    = [];
-        $checks   = 0;
-        $managed  = WCD_MainWP_Site_Map::managedSites();
+        $sites        = [];
+        $checks       = 0;
+        $pages        = 0;
+        $totalUpdates = 0;
+        $managed      = WCD_MainWP_Site_Map::managedSites();
         foreach ($scope as $siteId) {
             $groupId = WCD_MainWP_Site_Map::getManualGroup($siteId);
             if ('' === $groupId) {
                 continue;
             }
-            $siteChecks = WCD_MainWP_Update_Flow::checksForGroup($groupId, $token);
-            $sites[]    = [
+
+            $response = WCD_MainWP_API::getGroupUrls($groupId, $token, ['per_page' => 1000]);
+            $urls     = $response['ok'] ? WCD_MainWP_Update_Flow::extractUrls($response['data']) : [];
+
+            $siteChecks = 0;
+            $sitePages  = 0;
+            $cleanUrls  = [];
+            foreach ($urls as $url) {
+                $desktop = ! empty($url['desktop']);
+                $mobile  = ! empty($url['mobile']);
+                if (! $desktop && ! $mobile) {
+                    continue;
+                }
+                $sitePages++;
+                $siteChecks += ($desktop ? 1 : 0) + ($mobile ? 1 : 0);
+                $cleanUrls[] = [
+                    'title'   => $url['html_title'] ?? '',
+                    'url'     => $url['url'] ?? '',
+                    'desktop' => $desktop,
+                    'mobile'  => $mobile,
+                ];
+            }
+
+            $items   = WCD_MainWP_Update_Flow::updateItemsForSite($siteId);
+            $sites[] = [
                 'site_id' => $siteId,
                 'name'    => $managed[$siteId]['name'] ?? '',
+                'host'    => $managed[$siteId]['domain'] ?? '',
                 'checks'  => $siteChecks,
+                'pages'   => $sitePages,
+                'urls'    => $cleanUrls,
+                'updates' => ['total' => count($items), 'items' => $items],
             ];
-            $checks += $siteChecks;
+            $checks       += $siteChecks;
+            $pages        += $sitePages;
+            $totalUpdates += count($items);
         }
 
-        $account   = WCD_MainWP_Site_Settings::getAccount();
-        $checksLeft = isset($account['checks_left']) ? (int) $account['checks_left'] : null;
+        $account     = WCD_MainWP_Site_Settings::getAccount();
+        $checksLeft  = isset($account['checks_left']) ? (int) $account['checks_left'] : null;
+        $checksLimit = isset($account['checks_limit']) ? (int) $account['checks_limit'] : null;
+        $checksDone  = isset($account['checks_done']) ? (int) $account['checks_done'] : null;
+        $enough      = null === $checksLeft ? true : ($checksLeft >= $checks);
 
         wp_send_json_success([
-            'sites'       => $sites,
-            'checks'      => $checks,
-            'screenshots' => $checks * 2,
-            'checks_left' => $checksLeft,
-            'enough'      => null === $checksLeft ? true : ($checksLeft >= $checks),
+            'sites'         => $sites,
+            'checks'        => $checks,
+            'pages'         => $pages,
+            'screenshots'   => $checks * 2,
+            'total_updates' => $totalUpdates,
+            'enough'        => $enough,
+            // checks_left/enough kept top-level for backward compatibility.
+            'checks_left'   => $checksLeft,
+            'credits'       => [
+                'plan_name'    => $account['plan_name'] ?? '',
+                'checks_left'  => $checksLeft,
+                'checks_limit' => $checksLimit,
+                'checks_done'  => $checksDone,
+                'enough'       => $enough,
+            ],
         ]);
     }
 
@@ -287,22 +333,19 @@ class WCD_MainWP_Ajax
     public static function poll(): void
     {
         self::guard();
-        $batch = isset($_POST['batch']) ? sanitize_text_field(wp_unslash($_POST['batch'])) : '';
-        if ('' === $batch) {
+
+        // The unified run polls all of a phase's batches at once: accept batches[] and aggregate, with
+        // single `batch` kept for backward compatibility.
+        $batches = [];
+        if (isset($_POST['batches']) && is_array($_POST['batches'])) {
+            $batches = array_filter(array_map('sanitize_text_field', wp_unslash($_POST['batches'])));
+        } elseif (isset($_POST['batch']) && '' !== $_POST['batch']) {
+            $batches = [sanitize_text_field(wp_unslash($_POST['batch']))];
+        }
+        $batches = array_values(array_unique($batches));
+        if (empty($batches)) {
             wp_send_json_error(['message' => __('Missing batch id.', 'webchangedetector')]);
         }
-
-        // The queues endpoint pre-aggregates per-batch status counts (and a per-sc_type breakdown) in
-        // `meta`, so we only need the meta, not the items: per_page=1 keeps the payload tiny.
-        $response = WCD_MainWP_API::getQueues($batch, '', self::token(), 1);
-        if (! $response['ok']) {
-            wp_send_json_error(['message' => $response['error']]);
-        }
-
-        $meta    = (is_array($response['data']) && isset($response['data']['meta']) && is_array($response['data']['meta'])) ? $response['data']['meta'] : [];
-        $byBatch = (isset($meta['status_counts_by_batch'][$batch]) && is_array($meta['status_counts_by_batch'][$batch]))
-            ? $meta['status_counts_by_batch'][$batch]
-            : ((isset($meta['status_counts']) && is_array($meta['status_counts'])) ? $meta['status_counts'] : []);
 
         $bucket = static function ($counts): array {
             $counts = is_array($counts) ? $counts : [];
@@ -315,12 +358,41 @@ class WCD_MainWP_Ajax
             ];
         };
 
-        $aggregate = $bucket($byBatch);
+        $aggregate = ['queue' => 0, 'processing' => 0, 'done' => 0, 'failed' => 0];
+        $perBatch  = [];
+        foreach ($batches as $batch) {
+            // The queues endpoint pre-aggregates per-batch status counts in `meta`, so we only need the
+            // meta, not the items: per_page=1 keeps the payload tiny.
+            $response = WCD_MainWP_API::getQueues($batch, '', self::token(), 1);
+            if (! $response['ok']) {
+                wp_send_json_error(['message' => $response['error']]);
+            }
+
+            $meta = (is_array($response['data']) && isset($response['data']['meta']) && is_array($response['data']['meta'])) ? $response['data']['meta'] : [];
+            if (isset($meta['status_counts_by_batch'][$batch]) && is_array($meta['status_counts_by_batch'][$batch])) {
+                $byBatch = $meta['status_counts_by_batch'][$batch];
+            } elseif (1 === count($batches) && isset($meta['status_counts']) && is_array($meta['status_counts'])) {
+                // Single-batch back-compat only: the global status_counts is for this one batch. Never
+                // reuse it across multiple batches (it would multiply the aggregate).
+                $byBatch = $meta['status_counts'];
+            } else {
+                $byBatch = [];
+            }
+
+            $b               = $bucket($byBatch);
+            $perBatch[$batch] = $b;
+            foreach ($aggregate as $key => $val) {
+                $aggregate[$key] = $val + $b[$key];
+            }
+        }
+
         $remaining = $aggregate['queue'] + $aggregate['processing'];
         $finished  = $aggregate['done'] + $aggregate['failed'];
 
         wp_send_json_success(array_merge($aggregate, [
             'remaining' => $remaining,
+            // Per-batch breakdown lets the unified run card show each site's done/total counter.
+            'by_batch'  => $perBatch,
             // Only "complete" once the queue is empty AND something finished, so we never stop on a
             // batch whose queue has not been populated yet.
             'complete'  => 0 === $remaining && $finished > 0,
@@ -361,6 +433,61 @@ class WCD_MainWP_Ajax
         }
 
         wp_send_json_success(['status' => $status]);
+    }
+
+    /* ────────────────────── Change Detections overview ─────────────────── */
+
+    /**
+     * Render the runs list (batch or flat view) for the given filters. Returns rendered HTML
+     * fragments ({ html, pagination }) which the JS swaps in.
+     */
+    public static function runs_render(): void
+    {
+        self::guard();
+
+        $view  = (isset($_POST['view']) && 'flat' === $_POST['view']) ? 'flat' : 'batch';
+        $input = [
+            'page'            => isset($_POST['page']) ? (int) $_POST['page'] : 1,
+            'from'            => isset($_POST['from']) ? sanitize_text_field(wp_unslash($_POST['from'])) : '',
+            'to'              => isset($_POST['to']) ? sanitize_text_field(wp_unslash($_POST['to'])) : '',
+            'source'          => isset($_POST['source']) ? sanitize_text_field(wp_unslash($_POST['source'])) : '',
+            'status'          => isset($_POST['status']) ? sanitize_text_field(wp_unslash($_POST['status'])) : '',
+            'difference_only' => ! empty($_POST['difference_only']) && 'false' !== $_POST['difference_only'],
+            'site_ids'        => (isset($_POST['site_ids']) && is_array($_POST['site_ids'])) ? array_map('intval', wp_unslash($_POST['site_ids'])) : [],
+        ];
+
+        $filters = WCD_MainWP_Runs_View::buildApiFilters($input);
+        $result  = 'flat' === $view
+            ? WCD_MainWP_Runs_View::renderFlatList($filters)
+            : WCD_MainWP_Runs_View::renderBatchList($filters);
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Render the comparison table for a single batch (the accordion drill-in).
+     */
+    public static function runs_comparisons(): void
+    {
+        self::guard();
+
+        $batch = isset($_POST['batch']) ? sanitize_text_field(wp_unslash($_POST['batch'])) : '';
+        if ('' === $batch) {
+            wp_send_json_error(['message' => __('Missing batch id.', 'webchangedetector')]);
+        }
+
+        $response = WCD_MainWP_API::getComparisons([
+            'batches'        => $batch,
+            'per_page'       => 100,
+            'orderBy'        => 'difference_percent',
+            'orderDirection' => 'desc',
+        ], self::token());
+        if (! $response['ok']) {
+            wp_send_json_error(['message' => $response['error']]);
+        }
+
+        $comparisons = WCD_MainWP_Update_Flow::extractUrls($response['data']);
+        wp_send_json_success(['html' => WCD_MainWP_Runs_View::renderComparisonsTable($comparisons, false)]);
     }
 
     /* ────────────────────────────── Internals ──────────────────────────── */

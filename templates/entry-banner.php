@@ -14,6 +14,8 @@
  * @var int      $site_id       Site id when scope is 'site' (0 otherwise).
  * @var int      $sites_count   Number of sites in scope.
  * @var int|null $updates_count Pending MainWP updates in scope (null when unknown).
+ * @var bool     $force_enabled Keep the CTA enabled even when $updates_count is 0 (caller knows
+ *                              updates exist, e.g. the Updates-page entry point). Optional.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -60,7 +62,11 @@ if (null !== $updates_count && $updates_count > 0) {
             <div class="wcd-hero__lbl"><?php esc_html_e('Checks', 'webchangedetector'); ?></div>
         </div>
     </div>
-    <button type="button" class="wcd-hero__cta wcd-safe-update" data-scope="<?php echo esc_attr($scope); ?>" data-site-id="<?php echo esc_attr((string) $site_id); ?>">
-        <i class="play icon"></i> <?php esc_html_e('Run visual check & update', 'webchangedetector'); ?>
+    <?php $no_updates = empty($force_enabled) && null !== $updates_count && 0 === (int) $updates_count; ?>
+    <button type="button" class="wcd-hero__cta wcd-safe-update<?php echo $no_updates ? ' is-disabled' : ''; ?>" data-scope="<?php echo esc_attr($scope); ?>" data-site-id="<?php echo esc_attr((string) $site_id); ?>" <?php disabled($no_updates); ?>>
+        <i class="<?php echo $no_updates ? 'ban' : 'play'; ?> icon"></i>
+        <?php echo esc_html($no_updates ? __('No updates available', 'webchangedetector') : __('Run visual check & update', 'webchangedetector')); ?>
     </button>
 </div>
+<?php // The unified in-card run renders here, right below the launch band (no popup). ?>
+<div class="wcd-run-host" data-scope="<?php echo esc_attr($scope); ?>" data-site-id="<?php echo esc_attr((string) $site_id); ?>"></div>

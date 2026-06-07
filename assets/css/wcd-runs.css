@@ -1,0 +1,151 @@
+/* WebChange Detector MainWP add-on: "Change Detections" overview page.
+   Visual language ported from the webapp's change-detections view, re-scoped to .wcd-runs and made
+   self-contained (the webapp design tokens are redefined here so the addon does not depend on the
+   webapp stylesheet). No inline styles. */
+
+.wcd-runs {
+    --wcd-accent: #2f6bed;
+    --wcd-accent-soft: rgba(47, 107, 237, .16);
+    --wcd-surface: #fff;
+    --wcd-surface-2: #f6f7f9;
+    --wcd-surface-3: #eceef1;
+    --wcd-border: #e2e4e7;
+    --wcd-border-strong: #d4d7db;
+    --wcd-text: #1f2430;
+    --wcd-text-2: #4b5563;
+    --wcd-text-3: #6b7280;
+    --wcd-green-soft: #e6f6ec;
+    --wcd-green-ink: #157a3d;
+    --wcd-red-soft: #fdecea;
+    --wcd-red: #d8463c;
+    --wcd-amber: #e0a106;
+    --wcd-amber-soft: #fcf3e0;
+    --wcd-violet-soft: #f0e9fb;
+    --wcd-r-md: 8px;
+    --wcd-r-lg: 12px;
+    --wcd-sh-3: 0 8px 24px rgba(0, 0, 0, .12);
+    color: var(--wcd-text);
+}
+
+.wcd-runs-title { margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+.wcd-runs .wcd-muted { color: var(--wcd-text-3); font-size: 13px; }
+
+/* ── Filter bar ───────────────────────────────────────────────────────── */
+.wcd-runs-filterbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin: 16px 0; padding: 12px; background: var(--wcd-surface);
+    border: 1px solid var(--wcd-border); border-radius: var(--wcd-r-lg);
+}
+
+.wcd-runs .wcd-filter-pill-wrap { position: relative; }
+
+.wcd-runs .wcd-filter-pill {
+    display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 12px;
+    background: var(--wcd-surface); border: 1px solid var(--wcd-border-strong);
+    border-radius: var(--wcd-r-md); color: var(--wcd-text); font-size: 13px; line-height: 1;
+    white-space: nowrap; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.wcd-runs .wcd-filter-pill:hover { border-color: var(--wcd-accent); }
+.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-filter-pill { border-color: var(--wcd-accent); box-shadow: 0 0 0 3px var(--wcd-accent-soft); }
+.wcd-runs .wcd-filter-pill > .dashicons:first-child { color: var(--wcd-text-3); font-size: 16px; width: 16px; height: 16px; }
+.wcd-runs .wcd-pill-label { text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 600; color: var(--wcd-text-3); }
+.wcd-runs .wcd-pill-value { font-weight: 600; color: var(--wcd-text); }
+.wcd-runs .wcd-pill-caret { font-size: 14px; width: 14px; height: 14px; color: var(--wcd-text-3); transition: transform .15s ease; }
+.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-pill-caret { transform: rotate(180deg); }
+
+/* Popovers */
+.wcd-runs .wcd-filter-popover {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+    min-width: 240px; padding: 12px; background: var(--wcd-surface);
+    border: 1px solid var(--wcd-border); border-radius: var(--wcd-r-lg); box-shadow: var(--wcd-sh-3);
+}
+.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-filter-popover { display: block; }
+.wcd-runs .wcd-filter-native,
+.wcd-runs .wcd-filter-multi {
+    width: 100%; min-width: 200px; padding: 8px 10px; font-size: 14px; color: var(--wcd-text);
+    background: var(--wcd-surface); border: 1px solid var(--wcd-border-strong); border-radius: var(--wcd-r-md);
+}
+.wcd-runs .wcd-date-field { display: block; margin: 8px 0; font-size: 13px; color: var(--wcd-text-2); }
+.wcd-runs .wcd-date-field input { margin-left: 6px; }
+.wcd-runs .wcd-date-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.wcd-runs .wcd-date-preset {
+    padding: 6px 12px; font-size: 13px; font-weight: 500; color: var(--wcd-text);
+    background: var(--wcd-surface-2); border: 1px solid var(--wcd-border); border-radius: 999px; cursor: pointer;
+    transition: all .15s ease;
+}
+.wcd-runs .wcd-date-preset:hover { border-color: var(--wcd-accent); color: var(--wcd-accent); }
+.wcd-runs .wcd-popover-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+.wcd-runs .wcd-filter-reset {
+    display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
+    color: var(--wcd-text-2); background: var(--wcd-surface); border: 1px solid var(--wcd-border-strong);
+    border-radius: var(--wcd-r-md); cursor: pointer;
+}
+.wcd-runs .wcd-filter-reset:hover { color: var(--wcd-red); border-color: var(--wcd-red); }
+
+/* View toggle (pushed to the right) */
+.wcd-runs-view-toggle { display: inline-flex; margin-left: auto; border: 1px solid var(--wcd-border-strong); border-radius: var(--wcd-r-md); overflow: hidden; }
+.wcd-runs-view-btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; height: 40px;
+    background: var(--wcd-surface); border: 0; color: var(--wcd-text-2); font-size: 13px; cursor: pointer;
+}
+.wcd-runs-view-btn + .wcd-runs-view-btn { border-left: 1px solid var(--wcd-border-strong); }
+.wcd-runs-view-btn.active { background: var(--wcd-accent); color: #fff; }
+
+/* ── Status dot-pills ─────────────────────────────────────────────────── */
+.wcd-runs .wcd-status-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.wcd-runs .wcd-status-badge {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; line-height: 1.4; color: var(--wcd-text);
+    background: var(--wcd-surface-2); border: 1px solid transparent; white-space: nowrap;
+}
+.wcd-runs .wcd-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: currentColor; }
+.wcd-runs .wcd-status-count { font-weight: 500; }
+.wcd-runs .wcd-status-badge.wcd-status-new { background: var(--wcd-red-soft); color: #991b1b; }
+.wcd-runs .wcd-status-badge.wcd-status-ok { background: var(--wcd-green-soft); color: var(--wcd-green-ink); }
+.wcd-runs .wcd-status-badge.wcd-status-to-fix { background: var(--wcd-amber-soft); color: #92400e; }
+.wcd-runs .wcd-status-badge.wcd-status-false-positive { background: var(--wcd-violet-soft); color: #5b21b6; }
+.wcd-runs .wcd-status-badge.wcd-status-failed { background: #e2e8f0; color: #475569; }
+.wcd-runs .wcd-status-badge.wcd-status-none { background: var(--wcd-surface-3); color: var(--wcd-text-2); }
+
+/* ── Batch (accordion) cards ──────────────────────────────────────────── */
+.wcd-runs-list { margin-top: 8px; }
+.wcd-runs-empty { padding: 28px; text-align: center; background: var(--wcd-surface); border: 1px solid var(--wcd-border); border-radius: var(--wcd-r-lg); }
+.wcd-runs-loading { padding: 28px; text-align: center; }
+
+.wcd-runs-batch { margin-bottom: 10px; background: var(--wcd-surface); border: 1px solid var(--wcd-border); border-radius: var(--wcd-r-lg); overflow: hidden; }
+.wcd-runs-batch-head {
+    display: flex; align-items: center; gap: 16px; padding: 14px 16px; cursor: pointer;
+}
+.wcd-runs-batch.is-open .wcd-runs-batch-head { box-shadow: inset 0 0 0 2px var(--wcd-accent); }
+.wcd-runs-caret { color: var(--wcd-text-3); transition: transform .15s ease; flex: none; }
+.wcd-runs-batch.is-open .wcd-runs-caret { transform: rotate(90deg); }
+.wcd-runs-col { min-width: 0; }
+.wcd-runs-col strong { display: block; color: var(--wcd-text-3); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
+.wcd-runs-col-status { flex: 0 0 auto; }
+.wcd-runs-col-name { flex: 2 1 220px; }
+.wcd-runs-col-date { flex: 1 1 140px; font-size: 13px; color: var(--wcd-text-2); }
+.wcd-runs-col-summary { flex: 2 1 220px; }
+.wcd-runs .wcd-cd-name { font-size: 15px; font-weight: 700; color: var(--wcd-text); }
+.wcd-runs .wcd-cd-subtitle { display: block; font-size: 13px; font-weight: 500; color: var(--wcd-text-3); }
+.wcd-runs .wcd-cd-websites { display: block; margin-top: 2px; font-size: 13px; color: var(--wcd-text-2); word-break: break-word; }
+.wcd-runs .wcd-ai-summary-text { color: var(--wcd-text-2); font-size: 13px; }
+.wcd-runs-batch-body { padding: 0 16px 16px; }
+
+/* ── Comparison table (drill-in + flat list) ──────────────────────────── */
+.wcd-runs .wcd-table { width: 100%; border-collapse: collapse; }
+.wcd-runs .wcd-table th, .wcd-runs .wcd-table td { padding: 10px 8px; border-bottom: 1px solid var(--wcd-border); text-align: left; vertical-align: top; }
+.wcd-runs .wcd-table .table-headline-row th { text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 600; color: var(--wcd-text-3); }
+.wcd-runs .wcd-url-link { color: var(--wcd-accent); font-weight: 600; }
+.wcd-runs .wcd-url-path { font-size: 12px; color: var(--wcd-text-3); word-break: break-all; }
+.wcd-runs .wcd-compared-row { display: flex; align-items: baseline; gap: 6px; }
+.wcd-runs .wcd-ba-label { min-width: 42px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--wcd-text-3); }
+.wcd-runs .screenshot-date { font-size: 13px; color: var(--wcd-text-2); }
+.wcd-runs .wcd-visual-percentage { font-size: 16px; font-weight: 800; color: var(--wcd-text-2); }
+.wcd-runs .wcd-visual-percentage.wcd-vc-sev-low { color: var(--wcd-amber); }
+.wcd-runs .wcd-visual-percentage.wcd-vc-sev-high { color: var(--wcd-red); }
+
+/* ── Pagination ───────────────────────────────────────────────────────── */
+.wcd-runs-pagination-wrap { margin-top: 14px; }
+.wcd-runs-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.wcd-runs-page-info { font-size: 13px; color: var(--wcd-text-2); }

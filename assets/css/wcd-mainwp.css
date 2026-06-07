@@ -102,40 +102,125 @@
 }
 .wcd-hero__cta:hover { background: #2f49b8; color: #fff; }
 .wcd-hero__cta:active { transform: translateY(1px); }
+.wcd-hero__cta.is-disabled,
+.wcd-hero__cta:disabled { background: rgba(255, 255, 255, .14); color: rgba(255, 255, 255, .5); cursor: not-allowed; }
+.wcd-hero__cta.is-disabled:hover,
+.wcd-hero__cta:disabled:hover { background: rgba(255, 255, 255, .14); transform: none; }
 @media (max-width: 900px) {
     .wcd-hero__stats { order: 3; width: 100%; justify-content: flex-start; }
     .wcd-hero__cta { order: 4; width: 100%; justify-content: center; }
 }
 
-/* ── Safe-update modal: per-site run card ──────────────────────────────── */
-/* The modal + card use native Fomantic (ui modal / segment / statistics / label / loader / table).
-   The only WCD-specific piece is the circular Pre/Updates/Post/Done stepper, which Fomantic has no
-   equivalent for. Everything else leans on MainWP's CSS. */
-.wcd-runcard-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.wcd-runcard-head .ui.header { margin: 0; flex: 1; }
-.wcd-activity { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 40px; margin: 12px 0; }
-.wcd-activity .ui.statistic { margin: 0; }
-.wcd-activity-updating { display: inline-flex; align-items: center; gap: 12px; color: var(--wcd-muted); }
-.wcd-runcard-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-.wcd-attn { font-weight: 600; display: inline-flex; align-items: center; }
-.wcd-attn-ok { color: var(--wcd-green); }
-.wcd-attn-changes { color: var(--wcd-red); }
+/* ── Preflight (confirm-only) modal content ────────────────────────────── */
+/* Lives inside a native Fomantic modal; translucent tints so it reads on light AND dark themes. */
+.wcd-pf-lead { margin: 0 0 14px; font-size: 13px; color: var(--wcd-muted); }
+.wcd-pf-summary {
+    display: flex; align-items: stretch; padding: 14px 0; margin-bottom: 14px;
+    border-top: 1px solid var(--wcd-border); border-bottom: 1px solid var(--wcd-border);
+}
+.wcd-pf-stat { flex: 1; text-align: center; border-left: 1px solid var(--wcd-border); }
+.wcd-pf-stat:first-child { border-left: 0; }
+.wcd-pf-statnum { font-size: 22px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.wcd-pf-stat.is-accent .wcd-pf-statnum { color: var(--wcd-accent); }
+.wcd-pf-statlbl { margin-top: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); }
 
-/* Circular progress stepper */
-.wcd-prog { display: flex; align-items: flex-start; justify-content: space-between; margin: 4px 0 4px; }
-.wcd-prog-step { position: relative; flex: 1; text-align: center; }
-.wcd-prog-step::before {
-    /* semi-transparent grey so the pending state reads correctly on MainWP's light AND dark themes */
-    content: ""; position: absolute; top: 9px; right: 50%; width: 100%; height: 2px; background: rgba(128, 128, 128, .35); z-index: 0;
+.wcd-pf-credit {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--wcd-border); border-radius: 8px;
 }
-.wcd-prog-step:first-child::before { display: none; }
-.wcd-prog-dot {
-    position: relative; z-index: 1; display: inline-block; width: 20px; height: 20px; border-radius: 50%;
-    background: rgba(128, 128, 128, .35); transition: background .2s, box-shadow .2s;
+.wcd-pf-credit.is-low { background: rgba(216, 70, 60, .12); border-color: rgba(216, 70, 60, .4); }
+.wcd-pf-credittext { font-size: 12.5px; }
+.wcd-pf-creditbar { flex: 1; min-width: 160px; max-width: 260px; height: 7px; border-radius: 4px; background: var(--wcd-border); overflow: hidden; display: flex; }
+.wcd-pf-creditused { height: 100%; background: rgba(128, 128, 128, .5); }
+.wcd-pf-creditrun { height: 100%; background: var(--wcd-accent); }
+.wcd-pf-creditrun.is-low { background: var(--wcd-red); }
+.wcd-pf-creditpill { padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.wcd-pf-creditpill.is-enough { background: rgba(31, 174, 87, .18); color: var(--wcd-green); }
+.wcd-pf-creditpill.is-low { background: rgba(216, 70, 60, .18); color: var(--wcd-red); }
+
+.wcd-pf-updates { margin-bottom: 14px; border: 1px solid var(--wcd-border); border-radius: 8px; }
+.wcd-pf-updtoggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; background: transparent; border: 0; cursor: pointer; font-size: 13px; font-weight: 600; color: inherit; text-align: left; }
+.wcd-pf-updchev { margin-left: auto; }
+.wcd-pf-updatesbody { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+.wcd-pf-updrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wcd-pf-updsite { min-width: 140px; font-size: 12px; color: var(--wcd-muted); }
+.wcd-pf-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: rgba(128, 128, 128, .12); font-size: 11.5px; }
+.wcd-pf-ver { color: var(--wcd-muted); }
+
+.wcd-pf-urls { display: flex; flex-direction: column; }
+.wcd-pf-urlshead { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.wcd-pf-urlname { font-size: 13.5px; font-weight: 600; }
+.wcd-pf-urlcount { padding: 1px 8px; border-radius: 999px; background: rgba(128, 128, 128, .12); font-size: 11px; color: var(--wcd-muted); }
+.wcd-pf-vps { display: inline-flex; gap: 6px; }
+.wcd-pf-vp { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--wcd-accent); color: var(--wcd-accent); font-size: 11px; }
+.wcd-pf-note { margin-top: 10px; }
+.wcd-pf-footnote { float: left; font-size: 12px; }
+
+/* ── Unified in-card run (PRE → UPDATES → POST → DONE) ─────────────────── */
+/* Renders on the page (light wp-admin / dark MainWP); translucent fills keep it theme-adaptive.
+   Dynamic widths (timeline fill, credit bar) use the .wcd-w-* step utilities, never inline styles. */
+.wcd-run { margin: 0 0 1.5em; border: 1px solid var(--wcd-accent); border-radius: 12px; overflow: hidden; background: rgba(128, 128, 128, .04); }
+.wcd-run[data-state="done"] { border-color: var(--wcd-green); }
+.wcd-run[data-state="error"] { border-color: var(--wcd-red); }
+
+.wcd-run__head { display: flex; align-items: center; gap: 14px; padding: 16px 20px; background: linear-gradient(90deg, rgba(47, 107, 237, .10), transparent 72%); }
+.wcd-run[data-state="done"] .wcd-run__head { background: rgba(31, 174, 87, .10); }
+.wcd-run__icon { flex-shrink: 0; width: 40px; height: 40px; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: var(--wcd-accent); color: #fff; }
+.wcd-run[data-state="done"] .wcd-run__icon { background: var(--wcd-green); }
+.wcd-run__icon i.icon, .wcd-run__pill i.icon, .wcd-run__dismiss i.icon, .wcd-run__statepill i.icon, .wcd-run__verdict i.icon, .wcd-run__sitepill i.icon { margin: 0; }
+.wcd-run__headmain { flex: 1; min-width: 0; }
+.wcd-run__titlerow { display: flex; align-items: center; gap: 9px; }
+.wcd-run__title { font-size: 16px; font-weight: 700; }
+.wcd-run__pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; background: var(--wcd-accent); }
+.wcd-run__pill.is-done { background: var(--wcd-green); }
+.wcd-run__pill.is-failed { background: var(--wcd-red); }
+.wcd-run__sub { margin-top: 2px; font-size: 12.5px; color: var(--wcd-muted); }
+.wcd-run__dismiss { flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--wcd-muted); cursor: pointer; }
+.wcd-run__dismiss:disabled { opacity: .4; cursor: not-allowed; }
+.wcd-run__dismiss:hover:not(:disabled) { background: rgba(128, 128, 128, .15); }
+
+.wcd-run__timeline { position: relative; padding: 18px 34px 6px; }
+.wcd-run__track { position: absolute; left: 50px; right: 50px; top: 31px; height: 3px; border-radius: 3px; background: rgba(128, 128, 128, .3); overflow: hidden; }
+.wcd-run__fill { height: 3px; border-radius: 3px; background: var(--wcd-green); transition: width .15s linear; }
+.wcd-run__steps { display: flex; justify-content: space-between; position: relative; }
+.wcd-run__step { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 60px; }
+.wcd-run__node { width: 28px; height: 28px; border-radius: 50%; background: rgba(128, 128, 128, .3); transition: background .2s, box-shadow .2s; }
+.wcd-run__step.is-active .wcd-run__node { background: var(--wcd-accent); box-shadow: 0 0 0 4px rgba(47, 107, 237, .2); }
+.wcd-run__step.is-done .wcd-run__node { background: var(--wcd-green); }
+.wcd-run__step.is-failed .wcd-run__node { background: var(--wcd-red); }
+.wcd-run__steplbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); }
+.wcd-run__step.is-active .wcd-run__steplbl, .wcd-run__step.is-done .wcd-run__steplbl { font-weight: 700; color: inherit; }
+
+.wcd-run__panels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin: 6px 20px 0; }
+.wcd-run__panel { border: 1px solid var(--wcd-border); border-radius: 10px; overflow: hidden; background: rgba(128, 128, 128, .04); display: flex; flex-direction: column; }
+.wcd-run__panelhead { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--wcd-border); font-size: 12.5px; font-weight: 600; }
+.wcd-run__paneltitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wcd-run__statepill { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: rgba(128, 128, 128, .18); color: var(--wcd-muted); }
+.wcd-run__statepill.is-active { background: rgba(47, 107, 237, .16); color: var(--wcd-accent); }
+.wcd-run__statepill.is-done { background: rgba(31, 174, 87, .18); color: var(--wcd-green); }
+.wcd-run__cells { display: grid; grid-template-columns: repeat(4, 1fr); }
+.wcd-run__cell { padding: 10px 6px; text-align: center; border-left: 1px solid var(--wcd-border); }
+.wcd-run__cell:first-child { border-left: 0; }
+.wcd-run__celllbl { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); }
+.wcd-run__cellval { margin-top: 2px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.wcd-run__panel--upd .wcd-run__updbody { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 64px; padding: 10px 8px; text-align: center; }
+.wcd-run__updsub { margin-top: 2px; font-size: 11px; color: var(--wcd-muted); }
+
+.wcd-run__sites { padding: 12px 20px 4px; display: flex; flex-direction: column; gap: 7px; }
+.wcd-run__site { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 9px; background: rgba(128, 128, 128, .06); border: 1px solid var(--wcd-border); }
+.wcd-run__sitemark { flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: var(--wcd-accent); color: #fff; font-size: 10px; font-weight: 700; }
+.wcd-run__sitename { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wcd-run__sitecount { min-width: 44px; text-align: right; font-size: 11.5px; color: var(--wcd-muted); font-variant-numeric: tabular-nums; }
+.wcd-run__sitepill { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 96px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: rgba(128, 128, 128, .18); color: var(--wcd-muted); }
+.wcd-run__sitepill.is-clean { background: rgba(31, 174, 87, .18); color: var(--wcd-green); }
+.wcd-run__sitepill.is-flagged { background: rgba(224, 161, 6, .18); color: var(--wcd-amber); }
+
+.wcd-run__foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px 16px; }
+.wcd-run__footspacer { flex: 1; }
+.wcd-run__verdict { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 700; }
+.wcd-run__verdict.is-ok { color: var(--wcd-green); }
+.wcd-run__verdict.is-flagged { color: var(--wcd-amber); }
+
+@media (max-width: 782px) {
+    .wcd-run__panels { grid-template-columns: 1fr; }
 }
-.wcd-prog-lbl { display: block; margin-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); }
-.wcd-prog-step.is-active .wcd-prog-dot { background: var(--wcd-accent); box-shadow: 0 0 0 4px rgba(47, 107, 237, .2); }
-.wcd-prog-step.is-active .wcd-prog-lbl { color: var(--wcd-accent); font-weight: 600; }
-.wcd-prog-step.is-done .wcd-prog-dot { background: var(--wcd-green); }
-.wcd-prog-step.is-error .wcd-prog-dot { background: var(--wcd-red); }
-.wcd-prog-step.is-error .wcd-prog-lbl { color: var(--wcd-red); }
