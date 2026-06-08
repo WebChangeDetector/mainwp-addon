@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: WebChange Detector for MainWP - Visual Regression Testing for WP Updates
- * Description: Visual regression testing for MainWP: capture before/after screenshots around your updates and instantly see what changed.
+ * Plugin Name: WebChange Detector for MainWP 
+ * Description: Visual regression testing in MainWP: capture before/after screenshots around your updates and instantly see what changed.
  * Version: 0.1.0
- * Author: WebChange Detector
+ * Author: Mike Miler
  * Documentation URI: https://api.webchangedetector.com/docs/
  */
 

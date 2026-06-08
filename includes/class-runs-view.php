@@ -225,9 +225,9 @@ class WCD_MainWP_Runs_View
 
         ob_start();
         ?>
-        <table class="wcd-table">
+        <table class="ui celled striped compact table">
             <thead>
-                <tr class="table-headline-row">
+                <tr>
                     <th><?php esc_html_e('Status', 'webchangedetector'); ?></th>
                     <?php if ($withRun) : ?><th><?php esc_html_e('Run', 'webchangedetector'); ?></th><?php endif; ?>
                     <th><?php esc_html_e('URL', 'webchangedetector'); ?></th>
@@ -260,7 +260,7 @@ class WCD_MainWP_Runs_View
         $finishedAt  = $batch['finished_at'] ?? '';
         $aiSummary   = $batch['ai_summary']['summary'] ?? '';
         ?>
-        <div class="wcd-runs-batch" data-batch-id="<?php echo esc_attr($batchId); ?>">
+        <div class="ui segment wcd-runs-batch" data-batch-id="<?php echo esc_attr($batchId); ?>">
             <div class="wcd-runs-batch-head">
                 <span class="wcd-runs-caret dashicons dashicons-arrow-right-alt2"></span>
                 <div class="wcd-runs-col wcd-runs-col-status">
@@ -361,28 +361,27 @@ class WCD_MainWP_Runs_View
     }
 
     /**
-     * Status dot-pill, mirroring the webapp's prettyPrintComparisonStatus (built with esc_* so it is
-     * safe to echo directly).
+     * Status badge as a native Fomantic `ui label` (themes for light/dark automatically). The colour
+     * variants are MainWP's own; built with esc_* so it is safe to echo directly.
      *
-     * @param int|null $count Optional count shown after the label.
+     * @param int|null $count Optional count shown in the label's detail.
      */
     protected static function statusBadge(string $status, $count = null): void
     {
         $meta = [
-            'new'            => ['wcd-status-new', __('New', 'webchangedetector')],
-            'ok'             => ['wcd-status-ok', __('OK', 'webchangedetector')],
-            'to_fix'         => ['wcd-status-to-fix', __('To Fix', 'webchangedetector')],
-            'false_positive' => ['wcd-status-false-positive', __('False positive', 'webchangedetector')],
-            'failed'         => ['wcd-status-failed', __('Failed', 'webchangedetector')],
-            'none'           => ['wcd-status-none', __('No changes', 'webchangedetector')],
+            'new'            => ['red', __('New', 'webchangedetector')],
+            'ok'             => ['green', __('OK', 'webchangedetector')],
+            'to_fix'         => ['orange', __('To Fix', 'webchangedetector')],
+            'false_positive' => ['purple', __('False positive', 'webchangedetector')],
+            'failed'         => ['grey', __('Failed', 'webchangedetector')],
+            'none'           => ['basic', __('No changes', 'webchangedetector')],
         ];
-        $modifier = $meta[$status][0] ?? 'wcd-status-none';
-        $label    = $meta[$status][1] ?? ucfirst($status);
+        $color = $meta[$status][0] ?? 'basic';
+        $label = $meta[$status][1] ?? ucfirst($status);
         ?>
-        <span class="wcd-status-badge <?php echo esc_attr($modifier); ?>">
-            <span class="wcd-status-dot"></span>
-            <span class="wcd-status-text"><?php echo esc_html($label); ?></span>
-            <?php if (null !== $count) : ?><span class="wcd-status-count"><?php echo esc_html((string) $count); ?></span><?php endif; ?>
+        <span class="ui <?php echo esc_attr($color); ?> label">
+            <?php echo esc_html($label); ?>
+            <?php if (null !== $count) : ?><span class="detail"><?php echo esc_html((string) $count); ?></span><?php endif; ?>
         </span>
         <?php
     }
@@ -420,12 +419,17 @@ class WCD_MainWP_Runs_View
 
     protected static function emptyBox(): string
     {
-        return self::messageBox('wcd-muted', __('No change detections yet. Run an On-Demand Check or monitoring, or try different filters.', 'webchangedetector'));
+        return self::messageBox('info', __('No change detections yet. Run an On-Demand Check or monitoring, or try different filters.', 'webchangedetector'));
     }
 
-    protected static function messageBox(string $class, string $text): string
+    /**
+     * A native Fomantic `ui message` (themes for light/dark). $type: 'error' -> negative, else info.
+     */
+    protected static function messageBox(string $type, string $text): string
     {
-        return '<div class="wcd-runs-empty ' . esc_attr($class) . '">' . esc_html($text) . '</div>';
+        $cls = 'wcd-error' === $type || 'error' === $type ? 'ui negative message' : 'ui message';
+
+        return '<div class="' . $cls . '"><p>' . esc_html($text) . '</p></div>';
     }
 
     /* ───────────────────────────── Helpers ─────────────────────────────── */
