@@ -32,6 +32,10 @@ wp-config.php
 # Log files
 *.log
 
+# Composer dev dependencies (PHPCS / WPCS) — not shipped with the plugin
+/vendor/
+composer.lock
+
 # htaccess
 /.htaccess
 

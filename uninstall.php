@@ -6,22 +6,22 @@
  * @package WebChangeDetector_MainWP
  */
 
-defined('WP_UNINSTALL_PLUGIN') || exit;
+defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
-$wcd_keys = [
-    'wcd_api_token',
-    'wcd_api_key', // legacy v0.1.0 option.
-    'wcd_site_map',
-];
+$wcd_mainwp_keys = array(
+	'wcd_api_token',
+	'wcd_api_key', // legacy v0.1.0 option.
+	'wcd_site_map',
+);
 
-foreach ($wcd_keys as $wcd_key) {
-    delete_option($wcd_key);
-    if (is_multisite()) {
-        delete_site_option($wcd_key);
-    }
+foreach ( $wcd_mainwp_keys as $wcd_mainwp_key ) {
+	delete_option( $wcd_mainwp_key );
+	if ( is_multisite() ) {
+		delete_site_option( $wcd_mainwp_key );
+	}
 }
 
-delete_transient('wcd_account_details');
-if (is_multisite()) {
-    delete_site_transient('wcd_account_details');
+delete_transient( 'wcd_account_details' );
+if ( is_multisite() ) {
+	delete_site_transient( 'wcd_account_details' );
 }

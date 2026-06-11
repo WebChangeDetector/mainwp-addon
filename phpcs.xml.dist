@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<ruleset name="WebChangeDetector MainWP Add-on">
+	<description>WordPress Coding Standards for the WebChange Detector MainWP Add-on</description>
+
+	<!-- Scan PHP files only -->
+	<arg name="extensions" value="php"/>
+
+	<!-- Show sniff codes in reports -->
+	<arg value="ps"/>
+
+	<!-- Scan all files in this directory -->
+	<file>.</file>
+
+	<!-- Exclude vendor directory -->
+	<exclude-pattern>*/vendor/*</exclude-pattern>
+
+	<!-- Use WordPress Coding Standards -->
+	<rule ref="WordPress"/>
+
+	<!-- Set minimum supported WP/PHP versions -->
+	<config name="minimum_wp_version" value="6.0"/>
+	<config name="testVersion" value="7.4-"/>
+
+	<!-- Text domain -->
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="webchangedetector"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Prefixes for our function/class/constant/variable names. We deliberately omit the bare
+	     "wcd" prefix (3 chars triggers ShortPrefixPassed); every global symbol we declare uses the
+	     longer "WCD_MainWP"/"wcd_mainwp_" or "webchangedetector" form. -->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="webchangedetector"/>
+				<element value="WCD_MainWP"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Template files use local-scope variables passed via include, not true globals -->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound">
+		<exclude-pattern>*/templates/*</exclude-pattern>
+	</rule>
+
+	<!-- We invoke MainWP's own documented hooks (mainwp_getsites, mainwp_pageheader_extensions,
+	     mainwp_pagefooter_sites, etc.) verbatim — they are MainWP's hook names, not ours to prefix.
+	     This is the same exception the customer plugin uses for third-party hooks (WPML/LiteSpeed). -->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound">
+		<exclude-pattern>*/includes/class-wcd-mainwp-site-map.php</exclude-pattern>
+		<exclude-pattern>*/includes/class-wcd-mainwp-url-sync.php</exclude-pattern>
+		<exclude-pattern>*/templates/admin-page.php</exclude-pattern>
+		<exclude-pattern>*/templates/site-tab.php</exclude-pattern>
+	</rule>
+</ruleset>
