@@ -54,7 +54,7 @@ class WCD_MainWP_API {
 		}
 
 		if ( empty( $api_token ) ) {
-			return self::result( false, 0, null, __( 'No API token configured.', 'webchangedetector' ) );
+			return self::result( false, 0, null, __( 'No API token configured.', 'webchangedetector-for-mainwp' ) );
 		}
 
 		$args = array(
@@ -62,9 +62,10 @@ class WCD_MainWP_API {
 			'timeout'  => isset( $req_opts['timeout'] ) ? (int) $req_opts['timeout'] : 30,
 			'blocking' => ! isset( $req_opts['blocking'] ) || $req_opts['blocking'],
 			// NOTE: we intentionally do NOT send x-wcd-plugin. That header makes the API treat the
-			// caller as the customer WP plugin: the CheckWpVersion middleware would reject our
-			// independently-versioned addon (0.1.0 -> 10 < config app.version 107), and WebsiteResource
-			// would return the legacy shape. The webapp (the sibling agency dashboard) omits it too.
+			// caller as the customer WP plugin: the CheckWpVersion middleware would compare our
+			// independent add-on version against the WP plugin's minimum version and reject us, and
+			// WebsiteResource would return the legacy shape. The webapp (the sibling agency
+			// dashboard) omits it too.
 			'headers'  => array_merge(
 				array(
 					'Authorization' => 'Bearer ' . $api_token,
@@ -152,7 +153,7 @@ class WCD_MainWP_API {
 		}
 
 		/* translators: %d: HTTP status code. */
-		return sprintf( __( 'API request failed (HTTP %d).', 'webchangedetector' ), $status );
+		return sprintf( __( 'API request failed (HTTP %d).', 'webchangedetector-for-mainwp' ), $status );
 	}
 
 	/* ────────────────────────────── Account ────────────────────────────── */
@@ -302,27 +303,36 @@ class WCD_MainWP_API {
 	/**
 	 * Trigger screenshots for groups.
 	 *
-	 * @param array  $group_ids Group UUIDs.
-	 * @param string $sc_type   'pre' (baseline) or 'post' (compare + diff).
-	 * @param string $source    'manual' | 'auto_update' | 'monitoring'.
-	 * @param string $api_token Bearer token; falls back to the stored token.
-	 * @param bool   $blocking  Whether to wait for the response (false dispatches fire-and-forget).
+	 * @param array  $group_ids       Group UUIDs.
+	 * @param string $sc_type         'pre' (baseline) or 'post' (compare + diff).
+	 * @param string $source          'manual' | 'auto_update' | 'monitoring'.
+	 * @param string $api_token       Bearer token; falls back to the stored token.
+	 * @param bool   $blocking        Whether to wait for the response (false dispatches fire-and-forget).
+	 * @param bool   $batch_per_group Create one batch per group; the response then carries a `batches`
+	 *                                map (group uuid => batch uuid). Only sent when requested, so calls
+	 *                                against an older API stay identical (it returns the classic single
+	 *                                shared batch).
 	 * @return array Normalized API result.
 	 */
-	public static function take_screenshot( array $group_ids, string $sc_type = 'pre', string $source = 'manual', string $api_token = '', bool $blocking = true ): array {
+	public static function take_screenshot( array $group_ids, string $sc_type = 'pre', string $source = 'manual', string $api_token = '', bool $blocking = true, bool $batch_per_group = false ): array {
 		$req_opts = $blocking ? array() : array(
 			'blocking' => false,
 			'timeout'  => 1,
 		);
 
+		$body = array(
+			'group_ids' => array_values( $group_ids ),
+			'sc_type'   => $sc_type,
+			'source'    => $source,
+		);
+		if ( $batch_per_group ) {
+			$body['batch_per_group'] = 1;
+		}
+
 		return self::request(
 			'POST',
 			'/screenshots/take',
-			array(
-				'group_ids' => array_values( $group_ids ),
-				'sc_type'   => $sc_type,
-				'source'    => $source,
-			),
+			$body,
 			$api_token,
 			array(),
 			array(),

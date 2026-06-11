@@ -62,7 +62,7 @@ class WCD_MainWP_Update_Flow {
 				'ok'      => false,
 				'updated' => 0,
 				'offline' => false,
-				'error'   => __( 'MainWP update API is unavailable. Run the native update instead.', 'webchangedetector' ),
+				'error'   => __( 'MainWP update API is unavailable. Run the native update instead.', 'webchangedetector-for-mainwp' ),
 			);
 		}
 
@@ -83,6 +83,10 @@ class WCD_MainWP_Update_Flow {
 				if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
 					continue;
 				}
+
+				// Each update type can take minutes with no other AJAX activity; keep the tracked
+				// run from looking abandoned to another tab in the meantime.
+				self::touch_run();
 
 				$result = call_user_func( array( self::ABILITIES_CLASS, $method ), array( 'site_id_or_domain' => $site_id ) );
 
@@ -119,7 +123,7 @@ class WCD_MainWP_Update_Flow {
 				'ok'      => false,
 				'updated' => $updated,
 				'offline' => true,
-				'error'   => __( 'Site is offline.', 'webchangedetector' ),
+				'error'   => __( 'Site is offline.', 'webchangedetector-for-mainwp' ),
 			);
 		}
 
@@ -307,5 +311,166 @@ class WCD_MainWP_Update_Flow {
 		}
 
 		return $items;
+	}
+
+	/* ───────────────────────── Run state (resume) ──────────────────────── */
+
+	// The browser orchestrates the safe-update run, so a closed tab between the updates and the
+	// post screenshots would otherwise lose the post phase. Every phase transition is therefore
+	// persisted dashboard-side (network-aware option): the AJAX endpoints record pre batches,
+	// completed updates and post batches as they happen. When the page next loads and a run with
+	// installed updates but missing post batches has been inactive for RUN_STALE_AFTER seconds,
+	// the UI offers to take the missing post screenshots (resume) or discard the run.
+
+	const RUN_STATE_KEY   = 'wcd_mainwp_active_run';
+	const RUN_STALE_AFTER = 600; // Seconds without AJAX activity before a run counts as abandoned.
+
+	/**
+	 * The persisted state of the current safe-update run, or an empty array.
+	 *
+	 * @return array Run state (started_at, last_activity, phase, sites, pre_batches, updated_sites, post_batches).
+	 */
+	public static function run_state(): array {
+		$state = WCD_MainWP_Options::get( self::RUN_STATE_KEY, array() );
+
+		return is_array( $state ) ? $state : array();
+	}
+
+	/**
+	 * Start tracking a new run (replaces any previous state).
+	 *
+	 * @param array $sites Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 * @return void
+	 */
+	public static function start_run( array $sites ): void {
+		self::save_run(
+			array(
+				'started_at'    => time(),
+				'last_activity' => time(),
+				'phase'         => 'pre',
+				'sites'         => $sites,
+				'pre_batches'   => array(),
+				'updated_sites' => array(),
+				'post_batches'  => array(),
+			)
+		);
+	}
+
+	/**
+	 * Stop tracking the current run.
+	 *
+	 * @return void
+	 */
+	public static function clear_run(): void {
+		WCD_MainWP_Options::delete( self::RUN_STATE_KEY );
+	}
+
+	/**
+	 * Bump the run's activity timestamp (called from the polling endpoint while a run is driven).
+	 *
+	 * @return void
+	 */
+	public static function touch_run(): void {
+		$state = self::run_state();
+		// Throttled: poll ticks every ~3s; one option write per 30s keeps the timestamp fresh
+		// enough for the 600s staleness gate.
+		if ( $state && ( time() - (int) ( $state['last_activity'] ?? 0 ) ) > 30 ) {
+			self::save_run( $state );
+		}
+	}
+
+	/**
+	 * Record a dispatched pre-screenshot batch for a run site.
+	 *
+	 * @param int    $site_id MainWP site id.
+	 * @param string $batch   Batch UUID.
+	 * @return void
+	 */
+	public static function record_pre_batch( int $site_id, string $batch ): void {
+		$state = self::run_state();
+		if ( empty( $state['sites'][ $site_id ] ) || '' === $batch ) {
+			return;
+		}
+		$state['phase']                   = 'pre';
+		$state['pre_batches'][ $site_id ] = $batch;
+		self::save_run( $state );
+	}
+
+	/**
+	 * Record that a run site's updates finished (its post screenshots are now due).
+	 *
+	 * @param int $site_id MainWP site id.
+	 * @return void
+	 */
+	public static function record_site_updated( int $site_id ): void {
+		$state = self::run_state();
+		if ( empty( $state['sites'][ $site_id ] ) ) {
+			return;
+		}
+		$state['phase'] = 'updates';
+		if ( ! in_array( $site_id, $state['updated_sites'], true ) ) {
+			$state['updated_sites'][] = $site_id;
+		}
+		self::save_run( $state );
+	}
+
+	/**
+	 * Record a dispatched post-screenshot batch. Once every run site has one, the rest of the run
+	 * (screenshots + comparisons) finishes server-side, so the tracked state is cleared.
+	 *
+	 * @param int    $site_id MainWP site id.
+	 * @param string $batch   Batch UUID.
+	 * @return void
+	 */
+	public static function record_post_batch( int $site_id, string $batch ): void {
+		$state = self::run_state();
+		if ( empty( $state['sites'][ $site_id ] ) || '' === $batch ) {
+			return;
+		}
+		$state['phase']                    = 'post';
+		$state['post_batches'][ $site_id ] = $batch;
+		if ( count( $state['post_batches'] ) >= count( $state['sites'] ) ) {
+			self::clear_run();
+
+			return;
+		}
+		self::save_run( $state );
+	}
+
+	/**
+	 * Run sites whose updates finished but whose post screenshots were never dispatched.
+	 *
+	 * @param array $state Run state (from run_state()).
+	 * @return int[] Site ids with a missing post batch.
+	 */
+	public static function missing_post_sites( array $state ): array {
+		$updated = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? $state['updated_sites'] : array();
+		$posted  = isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? array_keys( $state['post_batches'] ) : array();
+
+		return array_values( array_diff( array_map( 'intval', $updated ), array_map( 'intval', $posted ) ) );
+	}
+
+	/**
+	 * Whether the tracked run has seen no AJAX activity for RUN_STALE_AFTER seconds (the driving
+	 * browser tab is gone, so it is safe to offer a resume).
+	 *
+	 * @param array $state Run state (from run_state()).
+	 * @return bool True when the run counts as abandoned.
+	 */
+	public static function run_is_stale( array $state ): bool {
+		$last = isset( $state['last_activity'] ) ? (int) $state['last_activity'] : 0;
+
+		return ( time() - $last ) > self::RUN_STALE_AFTER;
+	}
+
+	/**
+	 * Persist the run state with a fresh activity timestamp.
+	 *
+	 * @param array $state Run state to save.
+	 * @return void
+	 */
+	protected static function save_run( array $state ): void {
+		$state['last_activity'] = time();
+		WCD_MainWP_Options::set( self::RUN_STATE_KEY, $state );
 	}
 }

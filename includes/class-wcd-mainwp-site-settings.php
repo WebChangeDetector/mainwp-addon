@@ -16,10 +16,15 @@ defined( 'ABSPATH' ) || exit;
  */
 class WCD_MainWP_Site_Settings {
 
-	const OPTION_KEY      = 'wcd_api_token';
-	const ACCOUNT_CACHE   = 'wcd_account_details';
-	const ERROR_CACHE     = 'wcd_token_error';
-	const VERIFIED_CACHE  = 'wcd_token_verified';
+	const OPTION_KEY = 'wcd_api_token';
+
+	/** Sites-subpage slug of the "Settings" tab next to Visual Checks (page hook ManageSites + slug). */
+	const SUBPAGE_SLUG = 'WcdVisualChecksSettings';
+	// The transients carry the add-on's own prefix: the customer WCD plugin uses a plain
+	// `wcd_account_details` transient, and both plugins can live on the same dashboard site.
+	const ACCOUNT_CACHE   = 'wcd_mainwp_account_details';
+	const ERROR_CACHE     = 'wcd_mainwp_token_error';
+	const VERIFIED_CACHE  = 'wcd_mainwp_token_verified';
 	const ACCOUNT_TTL     = 300; // 5 minutes.
 	const AUTO_ENABLE_KEY = 'wcd_auto_enable_sites';
 
@@ -36,10 +41,12 @@ class WCD_MainWP_Site_Settings {
 	}
 
 	/**
-	 * Append the WebChange Detector sub-page to the MainWP sites tabs.
+	 * Append the WebChange Detector sub-pages to the MainWP sites tabs: the per-site tab and the
+	 * "Settings" page (sites & URL selection), shown next to Visual Checks via the area's own
+	 * tabular menu (WCD_MainWP_Runs_View::render_tabs()).
 	 *
 	 * @param array $sub_pages The existing sub-pages.
-	 * @return array The sub-pages with the WCD tab appended.
+	 * @return array The sub-pages with the WCD tabs appended.
 	 */
 	public static function register_site_tab( array $sub_pages ): array {
 		$sub_pages[] = array(
@@ -49,8 +56,30 @@ class WCD_MainWP_Site_Settings {
 			'menu_hidden' => true,
 			'callback'    => array( self::class, 'render_site_tab' ),
 		);
+		$sub_pages[] = array(
+			'title'       => __( 'Settings', 'webchangedetector-for-mainwp' ),
+			'slug'        => self::SUBPAGE_SLUG,
+			'sitetab'     => false,
+			'menu_hidden' => true,
+			// Explicit href so the Sites page navigation never appends a per-site &id=N.
+			'href'        => 'admin.php?page=ManageSites' . self::SUBPAGE_SLUG,
+			'callback'    => array( self::class, 'render_sites_settings_page' ),
+		);
 
 		return $sub_pages;
+	}
+
+	/**
+	 * Render the "Settings" tab of the Visual Checks area (sites & URL selection).
+	 *
+	 * @return void
+	 */
+	public static function render_sites_settings_page(): void {
+		$token = self::get_global();
+		$sites = WCD_MainWP_Site_Map::managed_sites();
+		$map   = WCD_MainWP_Site_Map::all();
+
+		include WCD_MAINWP_PLUGIN_PATH . 'templates/sites-settings-page.php';
 	}
 
 	/**
@@ -124,7 +153,7 @@ class WCD_MainWP_Site_Settings {
 		$response = WCD_MainWP_API::get_account( $token );
 
 		if ( ! $response['ok'] || empty( $response['data'] ) ) {
-			$error = $response['error'] ? $response['error'] : __( 'Could not retrieve account data.', 'webchangedetector' );
+			$error = $response['error'] ? $response['error'] : __( 'Could not retrieve account data.', 'webchangedetector-for-mainwp' );
 			if ( ! empty( $response['status'] ) ) {
 				$error .= ' (HTTP ' . (int) $response['status'] . ')';
 			}
@@ -195,7 +224,7 @@ class WCD_MainWP_Site_Settings {
 		check_admin_referer( 'wcd_save_settings' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'Insufficient permissions.', 'webchangedetector' ) );
+			wp_die( esc_html__( 'Insufficient permissions.', 'webchangedetector-for-mainwp' ) );
 		}
 
 		$token = isset( $_POST[ self::OPTION_KEY ] ) ? sanitize_text_field( wp_unslash( $_POST[ self::OPTION_KEY ] ) ) : '';
@@ -240,7 +269,6 @@ class WCD_MainWP_Site_Settings {
 	public static function render_settings_form(): void {
 		$token   = self::get_global();
 		$account = '' !== $token ? self::get_account() : array();
-		$sites   = WCD_MainWP_Site_Map::managed_sites();
 		$map     = WCD_MainWP_Site_Map::all();
 
 		include WCD_MAINWP_PLUGIN_PATH . 'templates/settings-page.php';

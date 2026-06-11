@@ -1,150 +1,107 @@
 <?php
 /**
- * "Change Detections" overview page (Sites submenu). Renders the filter bar + an empty results
+ * "Visual Checks" overview page (Sites subpage, linked from the Monitoring menu group).
+ *
+ * Native MainWP chrome (pageheader/pagefooter) around a Fomantic filter bar + an empty results
  * container; wcd-mainwp.js detects #wcd-runs and loads the runs via AJAX (no inline JS/CSS).
+ * Only On-Demand Checks are shown; the source filter is fixed server-side.
  *
  * @package WebChangeDetector_MainWP
  */
 
 defined( 'ABSPATH' ) || exit;
 
-$token = WCD_MainWP_Site_Settings::get_global();
+$wcd_token = WCD_MainWP_Site_Settings::get_global();
 
-if ( '' === $token ) {
-	$settings_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
+do_action( 'mainwp_pageheader_sites', WCD_MainWP_Runs_View::PAGE_SLUG );
+
+if ( '' === $wcd_token ) {
+	$wcd_settings_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
+	WCD_MainWP_Runs_View::render_tabs( 'checks' );
 	?>
-	<div class="wcd-runs">
+	<div class="ui bottom attached padded segment">
 		<div class="ui info message"><p>
 			<?php
 			printf(
 				/* translators: %s: settings page URL. */
-				wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector' ) ),
-				esc_url( $settings_url )
+				wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
+				esc_url( $wcd_settings_url )
 			);
 			?>
 		</p></div>
 	</div>
 	<?php
+	do_action( 'mainwp_pagefooter_sites', WCD_MainWP_Runs_View::PAGE_SLUG );
 	return;
 }
 
-$status_options  = WCD_MainWP_Runs_View::status_options();
-$source_options  = WCD_MainWP_Runs_View::source_options();
-$website_options = WCD_MainWP_Runs_View::website_options();
-$from_initial    = gmdate( 'Y-m-d', strtotime( '-30 days' ) );
-$to_initial      = gmdate( 'Y-m-d' );
-$period_label    = WCD_MainWP_Runs_View::period_label( $from_initial, $to_initial );
+WCD_MainWP_Runs_View::render_tabs( 'checks' );
+
+$wcd_status_options  = WCD_MainWP_Runs_View::status_options();
+$wcd_website_options = WCD_MainWP_Runs_View::website_options();
+// Dashboard timezone (matches the JS date presets, which compute local dates).
+$wcd_from_initial = wp_date( 'Y-m-d', time() - 30 * DAY_IN_SECONDS );
+$wcd_to_initial   = wp_date( 'Y-m-d' );
 ?>
-<div class="wcd-runs" id="wcd-runs" data-from="<?php echo esc_attr( $from_initial ); ?>" data-to="<?php echo esc_attr( $to_initial ); ?>">
-	<h2 class="ui header"><?php esc_html_e( 'Change Detections', 'webchangedetector' ); ?></h2>
-	<p class="wcd-muted"><?php esc_html_e( 'All runs across your enabled sites. Filter by period, status, type or website, then open a run to see its comparisons.', 'webchangedetector' ); ?></p>
+<div class="ui bottom attached padded segment wcd-runs" id="wcd-runs" data-from="<?php echo esc_attr( $wcd_from_initial ); ?>" data-to="<?php echo esc_attr( $wcd_to_initial ); ?>">
 
-	<div class="ui segment wcd-runs-filterbar">
-		<!-- PERIOD -->
-		<div class="wcd-filter-pill-wrap" data-filter="period">
-			<button type="button" class="wcd-filter-pill" data-pop="period">
-				<span class="dashicons dashicons-clock"></span>
-				<span class="wcd-pill-label"><?php esc_html_e( 'Period', 'webchangedetector' ); ?></span>
-				<span class="wcd-pill-value" id="wcd-runs-period-value"><?php echo esc_html( $period_label ); ?></span>
-				<span class="dashicons dashicons-arrow-down-alt2 wcd-pill-caret"></span>
-			</button>
-			<div class="ui segment wcd-filter-popover">
-				<div class="wcd-date-presets">
-					<button type="button" class="ui mini button wcd-date-preset" data-days="7">7 <?php esc_html_e( 'days', 'webchangedetector' ); ?></button>
-					<button type="button" class="ui mini button wcd-date-preset" data-days="30">30 <?php esc_html_e( 'days', 'webchangedetector' ); ?></button>
-					<button type="button" class="ui mini button wcd-date-preset" data-days="90">90 <?php esc_html_e( 'days', 'webchangedetector' ); ?></button>
-					<button type="button" class="ui mini button wcd-date-preset" data-days="all"><?php esc_html_e( 'All time', 'webchangedetector' ); ?></button>
-				</div>
-				<label class="wcd-date-field"><?php esc_html_e( 'From', 'webchangedetector' ); ?>
-					<input type="date" id="wcd-runs-from" value="<?php echo esc_attr( $from_initial ); ?>">
-				</label>
-				<label class="wcd-date-field"><?php esc_html_e( 'To', 'webchangedetector' ); ?>
-					<input type="date" id="wcd-runs-to" value="<?php echo esc_attr( $to_initial ); ?>">
-				</label>
-				<div class="wcd-popover-actions">
-					<button type="button" class="ui mini primary button wcd-runs-apply-period"><?php esc_html_e( 'Apply', 'webchangedetector' ); ?></button>
+	<div class="ui grid">
+		<div class="equal width row ui mini form">
+			<div class="middle aligned column">
+				<div class="ui mini buttons wcd-runs-view-toggle">
+					<button type="button" class="ui button active wcd-runs-view-btn" data-view="batch"><?php esc_html_e( 'Runs', 'webchangedetector-for-mainwp' ); ?></button>
+					<button type="button" class="ui button wcd-runs-view-btn" data-view="flat"><?php esc_html_e( 'List', 'webchangedetector-for-mainwp' ); ?></button>
 				</div>
 			</div>
-		</div>
-
-		<!-- STATUS -->
-		<div class="wcd-filter-pill-wrap" data-filter="status">
-			<button type="button" class="wcd-filter-pill" data-pop="status">
-				<span class="dashicons dashicons-flag"></span>
-				<span class="wcd-pill-label"><?php esc_html_e( 'Status', 'webchangedetector' ); ?></span>
-				<span class="wcd-pill-value" data-default="<?php esc_attr_e( 'All status', 'webchangedetector' ); ?>"><?php esc_html_e( 'All status', 'webchangedetector' ); ?></span>
-				<span class="dashicons dashicons-arrow-down-alt2 wcd-pill-caret"></span>
-			</button>
-			<div class="ui segment wcd-filter-popover">
-				<select id="wcd-runs-status" class="wcd-filter-multi" multiple size="4">
-					<?php foreach ( $status_options as $key => $label ) : ?>
-						<option value="<?php echo esc_attr( $key ); ?>"><?php echo esc_html( $label ); ?></option>
-					<?php endforeach; ?>
-				</select>
-			</div>
-		</div>
-
-		<!-- TYPE -->
-		<div class="wcd-filter-pill-wrap" data-filter="source">
-			<button type="button" class="wcd-filter-pill" data-pop="source">
-				<span class="dashicons dashicons-category"></span>
-				<span class="wcd-pill-label"><?php esc_html_e( 'Type', 'webchangedetector' ); ?></span>
-				<span class="wcd-pill-value" data-default="<?php esc_attr_e( 'All types', 'webchangedetector' ); ?>"><?php esc_html_e( 'All types', 'webchangedetector' ); ?></span>
-				<span class="dashicons dashicons-arrow-down-alt2 wcd-pill-caret"></span>
-			</button>
-			<div class="ui segment wcd-filter-popover">
-				<select id="wcd-runs-source" class="wcd-filter-native">
-					<?php foreach ( $source_options as $key => $label ) : ?>
-						<option value="<?php echo esc_attr( $key ); ?>"><?php echo esc_html( $label ); ?></option>
-					<?php endforeach; ?>
-				</select>
-			</div>
-		</div>
-
-		<!-- WEBSITE -->
-		<div class="wcd-filter-pill-wrap" data-filter="website">
-			<button type="button" class="wcd-filter-pill" data-pop="website">
-				<span class="dashicons dashicons-admin-site-alt3"></span>
-				<span class="wcd-pill-label"><?php esc_html_e( 'Website', 'webchangedetector' ); ?></span>
-				<span class="wcd-pill-value" data-default="<?php esc_attr_e( 'All websites', 'webchangedetector' ); ?>"><?php esc_html_e( 'All websites', 'webchangedetector' ); ?></span>
-				<span class="dashicons dashicons-arrow-down-alt2 wcd-pill-caret"></span>
-			</button>
-			<div class="ui segment wcd-filter-popover">
-				<?php if ( empty( $website_options ) ) : ?>
-					<p class="wcd-muted"><?php esc_html_e( 'No enabled sites yet.', 'webchangedetector' ); ?></p>
-				<?php else : ?>
-					<select id="wcd-runs-website" class="wcd-filter-multi" multiple size="6">
-						<?php foreach ( $website_options as $site ) : ?>
-							<option value="<?php echo esc_attr( (string) $site['site_id'] ); ?>"><?php echo esc_html( $site['name'] ); ?></option>
+			<div class="right aligned middle aligned column wcd-runs-filters">
+				<div id="wcd-runs-period" class="ui selection dropdown">
+					<input type="hidden" value="30">
+					<i class="dropdown icon"></i>
+					<div class="default text"><?php esc_html_e( 'Last 30 days', 'webchangedetector-for-mainwp' ); ?></div>
+					<div class="menu">
+						<div class="item" data-value="7"><?php esc_html_e( 'Last 7 days', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="item" data-value="30"><?php esc_html_e( 'Last 30 days', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="item" data-value="90"><?php esc_html_e( 'Last 90 days', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="item" data-value="all"><?php esc_html_e( 'All time', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="item" data-value="custom"><?php esc_html_e( 'Custom range', 'webchangedetector-for-mainwp' ); ?></div>
+					</div>
+				</div>
+				<span class="wcd-runs-daterange" hidden>
+					<input type="date" id="wcd-runs-from" value="<?php echo esc_attr( $wcd_from_initial ); ?>" aria-label="<?php esc_attr_e( 'From', 'webchangedetector-for-mainwp' ); ?>">
+					<input type="date" id="wcd-runs-to" value="<?php echo esc_attr( $wcd_to_initial ); ?>" aria-label="<?php esc_attr_e( 'To', 'webchangedetector-for-mainwp' ); ?>">
+				</span>
+				<div id="wcd-runs-status" class="ui selection multiple dropdown">
+					<input type="hidden" value="">
+					<i class="dropdown icon"></i>
+					<div class="default text"><?php esc_html_e( 'All statuses', 'webchangedetector-for-mainwp' ); ?></div>
+					<div class="menu">
+						<?php foreach ( $wcd_status_options as $wcd_status_key => $wcd_status_label ) : ?>
+							<div class="item" data-value="<?php echo esc_attr( $wcd_status_key ); ?>"><?php echo esc_html( $wcd_status_label ); ?></div>
 						<?php endforeach; ?>
-					</select>
-				<?php endif; ?>
+					</div>
+				</div>
+				<div id="wcd-runs-website" class="ui selection multiple dropdown">
+					<input type="hidden" value="">
+					<i class="dropdown icon"></i>
+					<div class="default text"><?php esc_html_e( 'All websites', 'webchangedetector-for-mainwp' ); ?></div>
+					<div class="menu">
+						<?php foreach ( $wcd_website_options as $wcd_site ) : ?>
+							<div class="item" data-value="<?php echo esc_attr( (string) $wcd_site['site_id'] ); ?>"><?php echo esc_html( $wcd_site['name'] ); ?></div>
+						<?php endforeach; ?>
+					</div>
+				</div>
+				<div id="wcd-runs-visual" class="ui selection dropdown">
+					<input type="hidden" value="0">
+					<i class="dropdown icon"></i>
+					<div class="default text"><?php esc_html_e( 'All detections', 'webchangedetector-for-mainwp' ); ?></div>
+					<div class="menu">
+						<div class="item" data-value="0"><?php esc_html_e( 'All detections', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="item" data-value="1"><?php esc_html_e( 'With changes only', 'webchangedetector-for-mainwp' ); ?></div>
+					</div>
+				</div>
+				<button type="button" class="ui tiny green button wcd-runs-apply"><?php esc_html_e( 'Filter', 'webchangedetector-for-mainwp' ); ?></button>
+				<button type="button" class="ui tiny basic button wcd-runs-reset"><?php esc_html_e( 'Reset', 'webchangedetector-for-mainwp' ); ?></button>
 			</div>
-		</div>
-
-		<!-- VISUAL -->
-		<div class="wcd-filter-pill-wrap" data-filter="visual">
-			<button type="button" class="wcd-filter-pill" data-pop="visual">
-				<span class="dashicons dashicons-visibility"></span>
-				<span class="wcd-pill-label"><?php esc_html_e( 'Visual', 'webchangedetector' ); ?></span>
-				<span class="wcd-pill-value" data-default="<?php esc_attr_e( 'All detections', 'webchangedetector' ); ?>"><?php esc_html_e( 'All detections', 'webchangedetector' ); ?></span>
-				<span class="dashicons dashicons-arrow-down-alt2 wcd-pill-caret"></span>
-			</button>
-			<div class="ui segment wcd-filter-popover">
-				<select id="wcd-runs-visual" class="wcd-filter-native">
-					<option value="0"><?php esc_html_e( 'All detections', 'webchangedetector' ); ?></option>
-					<option value="1"><?php esc_html_e( 'With changes only', 'webchangedetector' ); ?></option>
-				</select>
-			</div>
-		</div>
-
-		<button type="button" class="ui icon button wcd-runs-reset" title="<?php esc_attr_e( 'Reset filters', 'webchangedetector' ); ?>">
-			<span class="dashicons dashicons-image-rotate"></span>
-		</button>
-
-		<div class="ui buttons wcd-runs-view-toggle">
-			<button type="button" class="ui button active wcd-runs-view-btn" data-view="batch"><span class="dashicons dashicons-list-view"></span> <?php esc_html_e( 'Batch', 'webchangedetector' ); ?></button>
-			<button type="button" class="ui button wcd-runs-view-btn" data-view="flat"><span class="dashicons dashicons-editor-ul"></span> <?php esc_html_e( 'List', 'webchangedetector' ); ?></button>
 		</div>
 	</div>
 
@@ -153,3 +110,5 @@ $period_label    = WCD_MainWP_Runs_View::period_label( $from_initial, $to_initia
 	</div>
 	<div id="wcd-runs-pagination" class="wcd-runs-pagination-wrap"></div>
 </div>
+<?php
+do_action( 'mainwp_pagefooter_sites', WCD_MainWP_Runs_View::PAGE_SLUG );

@@ -12,13 +12,14 @@ defined( 'ABSPATH' ) || exit;
  */
 class WCD_MainWP_Bootstrap {
 
-	/** Admin page slugs where we load our CSS/JS and entry points. */
+	/**
+	 * Exact admin page slugs where we load our CSS/JS and entry points. The extension settings
+	 * page is matched via settings_page_slug() (computed from the plugin directory name) and all
+	 * Sites subpages via their shared "ManageSites" prefix; see on_our_page().
+	 */
 	const OUR_PAGES = array(
-		'Extensions-Mainwp-Addon',
-		'ManageSitesWcdVisualRegressionTesting',
 		'UpdatesManage',
 		'managesites',
-		'ManageSites',
 		'mainwp_tab', // Dashboard overview (widget).
 	);
 
@@ -54,11 +55,17 @@ class WCD_MainWP_Bootstrap {
 		add_filter( 'mainwp_getextensions', array( self::class, 'register_extension' ) );
 		add_filter( 'mainwp_getmetaboxes', array( self::class, 'register_widget' ) );
 
+		// The "Visual Checks" page lives in the left menu's Monitoring category group. This is the
+		// documented MainWP filter for placing a third-party page inside a category group.
+		add_filter( 'mainwp_menu_extensions_left_menu', array( self::class, 'register_left_menu_item' ) );
+
+		// Runs view first: the page navigation preserves subpage registration order, and the
+		// Visual Checks tab leads the area (Settings second).
+		WCD_MainWP_Runs_View::init();
 		WCD_MainWP_Site_Settings::init();
 		WCD_MainWP_Url_Sync::init();
 		WCD_MainWP_Update_Flow::init();
 		WCD_MainWP_Ajax::init();
-		WCD_MainWP_Runs_View::init();
 
 		add_action( 'admin_enqueue_scripts', array( self::class, 'enqueue_assets' ) );
 
@@ -90,6 +97,33 @@ class WCD_MainWP_Bootstrap {
 		);
 
 		return $extensions;
+	}
+
+	/**
+	 * Add the "Visual Checks" entry to the left menu's Monitoring category group.
+	 *
+	 * The page itself is registered as a Sites subpage (see WCD_MainWP_Runs_View) but hidden from
+	 * the Sites menu; this filter places its menu entry inside the Monitoring group instead, where
+	 * visual checks sit naturally next to MainWP's own uptime monitoring.
+	 *
+	 * @param array $items Left-menu items registered by extensions.
+	 * @return array Items with the Visual Checks entry appended.
+	 */
+	public static function register_left_menu_item( $items ): array {
+		$items   = is_array( $items ) ? $items : array();
+		$page    = 'ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG;
+		$items[] = array(
+			'title'                => esc_html__( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+			'parent_key'           => 'Extensions-Mainwp-Monitoring',
+			'slug'                 => $page,
+			'href'                 => 'admin.php?page=' . $page,
+			'level'                => 2,
+			'leftsub_order_level2' => 5,
+			// Highlights the Sites bar icon + opens the Monitoring group while on our page.
+			'active_path'          => array( $page => 'managesites' ),
+		);
+
+		return $items;
 	}
 
 	/**
@@ -204,7 +238,6 @@ class WCD_MainWP_Bootstrap {
 			$updates_count = WCD_MainWP_Update_Flow::pending_updates_count( $enabled );
 		}
 
-		$site_id       = $site_id; // 0 for bulk.
 		$force_enabled = $updates_known_present;
 		include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner.php';
 	}
@@ -228,7 +261,7 @@ class WCD_MainWP_Bootstrap {
 			WCD_MAINWP_VERSION
 		);
 
-		// Change Detections overview styles (scoped to .wcd-runs; harmless on other pages).
+		// Visual Checks overview styles (scoped to .wcd-runs; harmless on other pages).
 		wp_enqueue_style(
 			'wcd-runs',
 			WCD_MAINWP_PLUGIN_URL . 'assets/css/wcd-runs.css',
@@ -248,12 +281,12 @@ class WCD_MainWP_Bootstrap {
 			'wcd-mainwp',
 			'wcdMainWP',
 			array(
-				'ajaxUrl'             => admin_url( 'admin-ajax.php' ),
-				'nonce'               => wp_create_nonce( WCD_MainWP_Ajax::NONCE ),
+				'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
+				'nonce'           => wp_create_nonce( WCD_MainWP_Ajax::NONCE ),
 				// MainWP prefixes a sites-submenu slug with "ManageSites" for the admin page hook.
-				'changeDetectionsUrl' => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG ),
-				'upgradeUrl'          => 'https://www.webchangedetector.com/pricing/',
-				'strings'             => self::js_strings(),
+				'visualChecksUrl' => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG ),
+				'upgradeUrl'      => 'https://www.webchangedetector.com/pricing/',
+				'strings'         => self::js_strings(),
 			)
 		);
 	}
@@ -274,13 +307,12 @@ class WCD_MainWP_Bootstrap {
 		if ( self::settings_page_slug() === $page ) {
 			return true;
 		}
-		foreach ( self::OUR_PAGES as $slug ) {
-			if ( $page === $slug || 0 === strpos( $page, 'ManageSites' ) ) {
-				return true;
-			}
+		// Every Sites subpage (per-site tabs, Visual Checks, per-site overview) carries this prefix.
+		if ( 0 === strpos( $page, 'ManageSites' ) ) {
+			return true;
 		}
 
-		return false;
+		return in_array( $page, self::OUR_PAGES, true );
 	}
 
 	/**
@@ -288,80 +320,92 @@ class WCD_MainWP_Bootstrap {
 	 */
 	protected static function js_strings(): array {
 		return array(
-			'cancel'           => __( 'Cancel', 'webchangedetector' ),
-			'preflightTitle'   => __( 'Pre-update visual check', 'webchangedetector' ),
-			'preflightLead'    => __( 'WebChange Detector captures every selected page before the updates, installs all updates, then re-captures and compares.', 'webchangedetector' ),
-			'confirmRun'       => __( 'Capture & update', 'webchangedetector' ),
-			'enoughCredits'    => __( 'Enough credits', 'webchangedetector' ),
-			'upgradePlan'      => __( 'Upgrade plan', 'webchangedetector' ),
+			'cancel'           => __( 'Cancel', 'webchangedetector-for-mainwp' ),
+			'preflightTitle'   => __( 'Pre-update visual check', 'webchangedetector-for-mainwp' ),
+			'preflightLead'    => __( 'WebChange Detector captures every selected page before the updates, installs all updates, then re-captures and compares.', 'webchangedetector-for-mainwp' ),
+			'confirmRun'       => __( 'Capture & update', 'webchangedetector-for-mainwp' ),
+			'enoughCredits'    => __( 'Enough credits', 'webchangedetector-for-mainwp' ),
+			'upgradePlan'      => __( 'Upgrade plan', 'webchangedetector-for-mainwp' ),
 			// Preflight summary strip + sections.
-			'sites'            => __( 'Sites', 'webchangedetector' ),
-			'pages'            => __( 'Pages', 'webchangedetector' ),
-			'screenshots'      => __( 'Screenshots', 'webchangedetector' ),
-			'checks'           => __( 'Checks', 'webchangedetector' ),
-			'desktop'          => __( 'Desktop', 'webchangedetector' ),
-			'mobile'           => __( 'Mobile', 'webchangedetector' ),
-			'page'             => __( 'page', 'webchangedetector' ),
-			'pagesPlural'      => __( 'pages', 'webchangedetector' ),
-			'site'             => __( 'site', 'webchangedetector' ),
-			'sitesPlural'      => __( 'sites', 'webchangedetector' ),
+			'sites'            => __( 'Sites', 'webchangedetector-for-mainwp' ),
+			'pages'            => __( 'Pages', 'webchangedetector-for-mainwp' ),
+			'screenshots'      => __( 'Screenshots', 'webchangedetector-for-mainwp' ),
+			'checks'           => __( 'Checks', 'webchangedetector-for-mainwp' ),
+			'desktop'          => __( 'Desktop', 'webchangedetector-for-mainwp' ),
+			'mobile'           => __( 'Mobile', 'webchangedetector-for-mainwp' ),
+			'page'             => __( 'page', 'webchangedetector-for-mainwp' ),
+			'pagesPlural'      => __( 'pages', 'webchangedetector-for-mainwp' ),
+			'site'             => __( 'site', 'webchangedetector-for-mainwp' ),
+			'sitesPlural'      => __( 'sites', 'webchangedetector-for-mainwp' ),
 			/* translators: %1$d used checks, %2$d available, %3$d total. */
-			'creditUsage'      => __( 'This run uses %1$d checks · %2$d of %3$d available', 'webchangedetector' ),
+			'creditUsage'      => __( 'This run uses %1$d checks · %2$d of %3$d available', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of checks the plan is short by. */
-			'creditShort'      => __( '%d short', 'webchangedetector' ),
-			'updatesToInstall' => __( 'updates will be installed (core, plugins & themes)', 'webchangedetector' ),
-			'liveNote'         => __( 'Sites stay live; only screenshots are taken.', 'webchangedetector' ),
-			'runningTitle'     => __( 'Safe update', 'webchangedetector' ),
-			'running'          => __( 'Running', 'webchangedetector' ),
-			'dontClose'        => __( "don't close this tab", 'webchangedetector' ),
+			'creditShort'      => __( '%d short', 'webchangedetector-for-mainwp' ),
+			'updatesToInstall' => __( 'updates will be installed (core, plugins & themes)', 'webchangedetector-for-mainwp' ),
+			'liveNote'         => __( 'Sites stay live; only screenshots are taken.', 'webchangedetector-for-mainwp' ),
+			'runningTitle'     => __( 'Safe update', 'webchangedetector-for-mainwp' ),
+			'running'          => __( 'Running', 'webchangedetector-for-mainwp' ),
+			'dontClose'        => __( "don't close this tab", 'webchangedetector-for-mainwp' ),
 			// Timeline steps.
-			'phasePre'         => __( 'Pre', 'webchangedetector' ),
-			'phaseUpdates'     => __( 'Updates', 'webchangedetector' ),
-			'phasePost'        => __( 'Post', 'webchangedetector' ),
-			'phaseDone'        => __( 'Done', 'webchangedetector' ),
-			'phaseFailed'      => __( 'Failed', 'webchangedetector' ),
-			'verbPre'          => __( 'Capturing pre-update screenshots', 'webchangedetector' ),
-			'verbUpdate'       => __( 'Installing all updates', 'webchangedetector' ),
-			'verbPost'         => __( 'Capturing post-update screenshots', 'webchangedetector' ),
-			'verbDone'         => __( 'Creating change detections', 'webchangedetector' ),
+			'phasePre'         => __( 'Pre', 'webchangedetector-for-mainwp' ),
+			'phaseUpdates'     => __( 'Updates', 'webchangedetector-for-mainwp' ),
+			'phasePost'        => __( 'Post', 'webchangedetector-for-mainwp' ),
+			'phaseDone'        => __( 'Done', 'webchangedetector-for-mainwp' ),
+			'phaseFailed'      => __( 'Failed', 'webchangedetector-for-mainwp' ),
+			'verbPre'          => __( 'Capturing pre-update screenshots', 'webchangedetector-for-mainwp' ),
+			'verbUpdate'       => __( 'Installing all updates', 'webchangedetector-for-mainwp' ),
+			'verbPost'         => __( 'Capturing post-update screenshots', 'webchangedetector-for-mainwp' ),
+			'verbDone'         => __( 'Creating change detections', 'webchangedetector-for-mainwp' ),
 			// Run-card stat panels.
-			'panelPre'         => __( 'Pre-update screenshots', 'webchangedetector' ),
-			'panelUpdates'     => __( 'Installing updates', 'webchangedetector' ),
-			'panelPost'        => __( 'Post-update screenshots', 'webchangedetector' ),
-			'queue'            => __( 'Queue', 'webchangedetector' ),
-			'processing'       => __( 'Processing', 'webchangedetector' ),
-			'doneCount'        => __( 'Done', 'webchangedetector' ),
-			'failed'           => __( 'Failed', 'webchangedetector' ),
-			'queued'           => __( 'Queued', 'webchangedetector' ),
-			'capturing'        => __( 'Capturing…', 'webchangedetector' ),
-			'captured'         => __( 'Captured', 'webchangedetector' ),
-			'installing'       => __( 'Installing…', 'webchangedetector' ),
-			'installed'        => __( 'Installed', 'webchangedetector' ),
-			'corePluginTheme'  => __( 'core · plugins · themes', 'webchangedetector' ),
+			'panelPre'         => __( 'Pre-update screenshots', 'webchangedetector-for-mainwp' ),
+			'panelUpdates'     => __( 'Installing updates', 'webchangedetector-for-mainwp' ),
+			'panelPost'        => __( 'Post-update screenshots', 'webchangedetector-for-mainwp' ),
+			'queue'            => __( 'Queue', 'webchangedetector-for-mainwp' ),
+			'processing'       => __( 'Processing', 'webchangedetector-for-mainwp' ),
+			'doneCount'        => __( 'Done', 'webchangedetector-for-mainwp' ),
+			'failed'           => __( 'Failed', 'webchangedetector-for-mainwp' ),
+			'queued'           => __( 'Queued', 'webchangedetector-for-mainwp' ),
+			'capturing'        => __( 'Capturing…', 'webchangedetector-for-mainwp' ),
+			'captured'         => __( 'Captured', 'webchangedetector-for-mainwp' ),
+			'installing'       => __( 'Installing…', 'webchangedetector-for-mainwp' ),
+			'installed'        => __( 'Installed', 'webchangedetector-for-mainwp' ),
+			'updatesUnit'      => __( 'updates', 'webchangedetector-for-mainwp' ),
 			// Per-site row statuses.
-			'statusPre'        => __( 'Capturing pre', 'webchangedetector' ),
-			'statusUpdating'   => __( 'Updating', 'webchangedetector' ),
-			'statusPost'       => __( 'Capturing post', 'webchangedetector' ),
-			'statusComparing'  => __( 'Comparing', 'webchangedetector' ),
-			'clean'            => __( 'Clean', 'webchangedetector' ),
+			'statusPre'        => __( 'Capturing pre', 'webchangedetector-for-mainwp' ),
+			'statusUpdating'   => __( 'Updating', 'webchangedetector-for-mainwp' ),
+			'statusPost'       => __( 'Capturing post', 'webchangedetector-for-mainwp' ),
+			'statusComparing'  => __( 'Comparing', 'webchangedetector-for-mainwp' ),
+			'clean'            => __( 'Clean', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review. */
-			'toReview'         => __( '%d to review', 'webchangedetector' ),
+			'toReview'         => __( '%d to review', 'webchangedetector-for-mainwp' ),
 			// Result summary + actions.
-			'allGood'          => __( 'All good', 'webchangedetector' ),
+			'allGood'          => __( 'All good', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review. */
-			'pagesToReview'    => __( '%d pages to review', 'webchangedetector' ),
+			'pagesToReview'    => __( '%d pages to review', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review (singular). */
-			'pageToReview'     => __( '%d page to review', 'webchangedetector' ),
-			'viewResults'      => __( 'View results', 'webchangedetector' ),
-			'recheck'          => __( 'Re-check', 'webchangedetector' ),
-			'runFooterNote'    => __( 'Sites stay live; only screenshots are taken. This usually takes a minute.', 'webchangedetector' ),
-			'stillRunning'     => __( 'Still running. Open in WebChange Detector.', 'webchangedetector' ),
-			'noChecks'         => __( 'No URLs configured for this site.', 'webchangedetector' ),
-			'noSites'          => __( 'No sites are enabled for visual checks.', 'webchangedetector' ),
-			'genericError'     => __( 'Something went wrong.', 'webchangedetector' ),
-			'syncing'          => __( 'Syncing URLs…', 'webchangedetector' ),
-			'ctaRunning'       => __( 'Visual check running…', 'webchangedetector' ),
-			'closeRunning'     => __( 'Updates are still running. Close anyway? The run keeps going in the background.', 'webchangedetector' ),
+			'pageToReview'     => __( '%d page to review', 'webchangedetector-for-mainwp' ),
+			'viewResults'      => __( 'View results', 'webchangedetector-for-mainwp' ),
+			'recheck'          => __( 'Re-check', 'webchangedetector-for-mainwp' ),
+			'runFooterNote'    => __( 'Sites stay live; only screenshots are taken. Keep this tab open until the run finishes.', 'webchangedetector-for-mainwp' ),
+			'stillRunning'     => __( 'Still running. Open in WebChange Detector.', 'webchangedetector-for-mainwp' ),
+			'noChecks'         => __( 'No URLs configured for this site.', 'webchangedetector-for-mainwp' ),
+			'noSites'          => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ),
+			'genericError'     => __( 'Something went wrong.', 'webchangedetector-for-mainwp' ),
+			'syncing'          => __( 'Syncing URLs…', 'webchangedetector-for-mainwp' ),
+			'ctaRunning'       => __( 'Visual check running…', 'webchangedetector-for-mainwp' ),
+			'closeRunning'     => __( 'Updates are still running. Close anyway? The run keeps going in the background.', 'webchangedetector-for-mainwp' ),
+			// Resume of an interrupted run.
+			'resumeTitle'      => __( 'Unfinished safe update found', 'webchangedetector-for-mainwp' ),
+			/* translators: %d: number of sites (singular). */
+			'resumeBodySingle' => __( 'Updates were installed, but the post-update screenshots for %d site are still missing. Take them now to complete your change detections.', 'webchangedetector-for-mainwp' ),
+			/* translators: %d: number of sites. */
+			'resumeBodyPlural' => __( 'Updates were installed, but the post-update screenshots for %d sites are still missing. Take them now to complete your change detections.', 'webchangedetector-for-mainwp' ),
+			'resumePost'       => __( 'Take post-update screenshots', 'webchangedetector-for-mainwp' ),
+			'discard'          => __( 'Discard', 'webchangedetector-for-mainwp' ),
+			/* translators: %d: number of sites (singular). */
+			'metaErrorSingle'  => __( 'The checks for %d site could not be loaded. It would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
+			/* translators: %d: number of sites. */
+			'metaErrorPlural'  => __( 'The checks for %d sites could not be loaded. They would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
 		);
 	}
 }

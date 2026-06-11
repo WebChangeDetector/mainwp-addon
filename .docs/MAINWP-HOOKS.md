@@ -26,7 +26,9 @@ the user to run the native update; the after-update hook still drives the post s
 | Hook | Type | Args | Used for |
 |------|------|------|----------|
 | `mainwp_getextensions` | filter | `$extensions` | Register the extension + settings page callback + icon |
-| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) + the dashboard "Change Detections" page (`WcdChangeDetections`, `sitetab => false`) |
+| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) + the "Visual Checks" page (`WcdVisualChecks`) and its "Settings" tab (`WcdVisualChecksSettings`), both `sitetab => false`, `menu_hidden => true`, explicit `href` |
+| `mainwp_manage_sites_navigation_items` | filter | `$items, $site_id, $shownPage` | Removes our entries from the Sites page navigation (the column is only visible on per-site views in MainWP 6; the visible Visual Checks / Settings switcher is our own `ui top attached tabular menu`) |
+| `mainwp_menu_extensions_left_menu` | filter | `$items` | Adds the "Visual Checks" entry (level 2, `parent_key => 'Extensions-Mainwp-Monitoring'`, `active_path`) to the left menu's Monitoring category group. This is MainWP's documented way for third-party pages to join a category group (consumed in `page-mainwp-extensions-groups.php`) |
 | `mainwp_getmetaboxes` | filter | `$metaboxes` | Dashboard widget (account/credits) |
 | `mainwp_getdbsites` | filter | `$pluginFile, $key, $sites, $groups, $options, $clients` | List managed child sites (id, url, name) |
 | `mainwp_site_synced` | action | `$pWebsite, $information` | After a child site syncs -> sync its URLs to the WCD group |
@@ -37,7 +39,7 @@ the user to run the native update; the after-update hook still drives the post s
 | `mainwp_after_wp_update` | action | `$information, $site` | Once per site after a core update -> post screenshots (recovery / non-card coverage) |
 | `mainwp_after_plugin_theme_translation_update` | action | `$information, $type, $slugs, $site` | Once per type after plugin/theme/translation update -> post screenshots |
 | `mainwp_pageheader_extensions` / `mainwp_pagefooter_extensions` | action | plugin file | MainWP chrome around the settings page |
-| `mainwp_pageheader_sites` / `mainwp_pagefooter_sites` | action | tab slug | MainWP chrome around the per-site tab |
+| `mainwp_pageheader_sites` / `mainwp_pagefooter_sites` | action | tab slug | MainWP chrome around the per-site tab AND the Visual Checks page (top header + left menu + content wrap) |
 
 ### Notes on the update hooks (verified)
 

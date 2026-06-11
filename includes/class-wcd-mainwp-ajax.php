@@ -18,6 +18,10 @@ class WCD_MainWP_Ajax {
 
 	const NONCE = 'wcd_mainwp_ajax';
 
+	// Sites per bundled take-screenshot call (batch_per_group). Bounds a single API request's
+	// execution window: 50 sites cost ceil(50/10) take calls instead of 50 (same as the webapp).
+	const TAKE_CHUNK = 10;
+
 	/**
 	 * Register every AJAX action handler.
 	 *
@@ -39,6 +43,10 @@ class WCD_MainWP_Ajax {
 			'mark_comparison',
 			'runs_render',
 			'runs_comparisons',
+			'run_start',
+			'run_status',
+			'run_resume_post',
+			'run_discard',
 		);
 
 		foreach ( $actions as $action ) {
@@ -60,7 +68,7 @@ class WCD_MainWP_Ajax {
 	 */
 	protected static function verify( bool $nonce_valid ): void {
 		if ( ! $nonce_valid || ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'webchangedetector' ) ), 403 );
+			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'webchangedetector-for-mainwp' ) ), 403 );
 		}
 	}
 
@@ -150,7 +158,7 @@ class WCD_MainWP_Ajax {
 
 		wp_send_json_success(
 			array(
-				'message' => __( 'URL sync started.', 'webchangedetector' ),
+				'message' => __( 'URL sync started.', 'webchangedetector-for-mainwp' ),
 				'count'   => $result['count'],
 			)
 		);
@@ -166,7 +174,7 @@ class WCD_MainWP_Ajax {
 		$site_id  = self::site_id();
 		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
 		if ( '' === $group_id ) {
-			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
 		$response = WCD_MainWP_API::get_group_urls( $group_id, self::token(), array( 'per_page' => 1000 ) );
@@ -215,7 +223,7 @@ class WCD_MainWP_Ajax {
 		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
 
 		if ( '' === $group_id || '' === $url_id ) {
-			wp_send_json_error( array( 'message' => __( 'Missing group or URL.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Missing group or URL.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
 		$response = WCD_MainWP_API::update_url_in_group(
@@ -309,37 +317,25 @@ class WCD_MainWP_Ajax {
 				continue;
 			}
 
-			$response = WCD_MainWP_API::get_group_urls( $group_id, $token, array( 'per_page' => 1000 ) );
-			$urls     = $response['ok'] ? WCD_MainWP_Update_Flow::extract_urls( $response['data'] ) : array();
-
-			$site_checks = 0;
-			$site_pages  = 0;
-			$clean_urls  = array();
-			foreach ( $urls as $url ) {
-				$desktop = ! empty( $url['desktop'] );
-				$mobile  = ! empty( $url['mobile'] );
-				if ( ! $desktop && ! $mobile ) {
-					continue;
-				}
-				++$site_pages;
-				$site_checks += ( $desktop ? 1 : 0 ) + ( $mobile ? 1 : 0 );
-				$clean_urls[] = array(
-					'title'   => $url['html_title'] ?? '',
-					'url'     => $url['url'] ?? '',
-					'desktop' => $desktop,
-					'mobile'  => $mobile,
-				);
-			}
+			// Meta-only fetch (same as banner_stats): the API aggregates the SELECTED counts
+			// group-wide in `meta`, so per_page=1 keeps the payload tiny. The actual URL list
+			// lazy-loads in the preflight when a site row is expanded (get_site_urls).
+			$response    = WCD_MainWP_API::get_group_urls( $group_id, $token, array( 'per_page' => 1 ) );
+			$meta        = ( $response['ok'] && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
+			$site_pages  = (int) ( $meta['selected_urls_count'] ?? 0 );
+			$site_checks = (int) ( $meta['selected_checks_count'] ?? 0 );
 
 			$items          = WCD_MainWP_Update_Flow::update_items_for_site( $site_id );
 			$sites[]        = array(
-				'site_id' => $site_id,
-				'name'    => $managed[ $site_id ]['name'] ?? '',
-				'host'    => $managed[ $site_id ]['domain'] ?? '',
-				'checks'  => $site_checks,
-				'pages'   => $site_pages,
-				'urls'    => $clean_urls,
-				'updates' => array(
+				'site_id'    => $site_id,
+				'name'       => $managed[ $site_id ]['name'] ?? '',
+				'host'       => $managed[ $site_id ]['domain'] ?? '',
+				'checks'     => $site_checks,
+				'pages'      => $site_pages,
+				// A failed meta fetch degrades to 0 checks; flag it so the preflight can warn
+				// instead of silently updating the site without its visual safety net.
+				'meta_error' => ! $response['ok'],
+				'updates'    => array(
 					'total' => count( $items ),
 					'items' => $items,
 				),
@@ -395,33 +391,136 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
-	 * Take screenshots of the requested site's group for the given screenshot type.
+	 * Take screenshots for the requested sites' groups for the given screenshot type.
+	 *
+	 * The unified run dispatches a whole phase at once: accepts site_ids[] (single site_id kept
+	 * for backward compatibility) and starts everything via chunked batch-per-group take calls.
+	 * Successfully dispatched batches are recorded in the tracked run state even when other
+	 * sites fail, so an aborted run stays resumable without taking those screenshots twice.
 	 *
 	 * @param string $sc_type The screenshot type ('pre' or 'post').
 	 * @return void
 	 */
 	protected static function take_screenshot( string $sc_type ): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$group_id = WCD_MainWP_Site_Map::get_manual_group( self::site_id() );
-		if ( '' === $group_id ) {
-			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector' ) ) );
+
+		// No all-sites fallback on a missing scope: screenshots cost credits, so the request
+		// must always name its sites explicitly.
+		$site_ids = array();
+		if ( isset( $_POST['site_ids'] ) && is_array( $_POST['site_ids'] ) ) {
+			$site_ids = array_filter( array_map( 'intval', wp_unslash( $_POST['site_ids'] ) ) );
+		} elseif ( ! empty( $_POST['site_id'] ) ) {
+			$site_ids = array( (int) $_POST['site_id'] );
+		}
+		$site_ids = array_values( array_unique( $site_ids ) );
+		if ( empty( $site_ids ) ) {
+			wp_send_json_error( array( 'message' => __( 'Missing site id.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		$response = WCD_MainWP_API::take_screenshot( array( $group_id ), $sc_type, 'manual', self::token() );
-		if ( ! $response['ok'] ) {
-			$message = 402 === $response['status'] ? __( 'Not enough check credits.', 'webchangedetector' ) : $response['error'];
+		$groups = array();
+		foreach ( $site_ids as $site_id ) {
+			$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+			if ( '' === $group_id ) {
+				wp_send_json_error(
+					array(
+						/* translators: %d: MainWP site id. */
+						'message' => sprintf( __( 'Site %d is not enabled.', 'webchangedetector-for-mainwp' ), $site_id ),
+					)
+				);
+			}
+			$groups[ $site_id ] = $group_id;
+		}
+
+		$result = self::take_batches_for_sites( $groups, $sc_type );
+
+		// Track the run's progress server-side so an interrupted run can be resumed (no-ops when
+		// the sites are not part of a tracked run, e.g. a re-check after the run completed).
+		foreach ( $result['batches'] as $site_id => $batch ) {
+			if ( 'pre' === $sc_type ) {
+				WCD_MainWP_Update_Flow::record_pre_batch( (int) $site_id, (string) $batch );
+			} else {
+				WCD_MainWP_Update_Flow::record_post_batch( (int) $site_id, (string) $batch );
+			}
+		}
+
+		// Any site without a batch fails the request (same semantics as the per-site calls this
+		// replaces); the recorded batches above keep the run resumable regardless.
+		if ( ! empty( $result['failed'] ) || empty( $result['batches'] ) ) {
+			$message = '' !== $result['error'] ? $result['error'] : __( 'Could not start the checks.', 'webchangedetector-for-mainwp' );
 			wp_send_json_error(
 				array(
 					'message' => $message,
-					'status'  => $response['status'],
+					'status'  => $result['status'],
 				)
 			);
 		}
 
-		$data  = self::unwrap( $response['data'] );
-		$batch = is_array( $data ) && ! empty( $data['batch'] ) ? $data['batch'] : '';
+		wp_send_json_success( array( 'batches' => $result['batches'] ) );
+	}
 
-		wp_send_json_success( array( 'batch' => $batch ) );
+	/**
+	 * Start screenshots for many sites' manual groups via chunked batch-per-group take calls.
+	 *
+	 * ONE API call per chunk creates one batch per group and returns the mapping, instead of one
+	 * call per site (mirrors the webapp's bulk on-demand start). Fallbacks per chunk:
+	 * - TRANSITIONAL (older API that ignored batch_per_group): the screenshots ARE already running
+	 *   in ONE shared batch, so re-requesting per group would take everything twice and burn
+	 *   credits; every site of the chunk maps to the shared batch instead.
+	 * - A group missing from the returned map was skipped by the API (no credits / nothing
+	 *   selected): its site is reported as failed.
+	 *
+	 * Recording into the run state is left to the callers (they differ in clear/record semantics).
+	 *
+	 * @param array  $groups  Map of site id => manual group uuid.
+	 * @param string $sc_type The screenshot type ('pre' or 'post').
+	 * @return array { batches: array<int,string>, failed: int[], error: string, status: int }
+	 */
+	protected static function take_batches_for_sites( array $groups, string $sc_type ): array {
+		$batches = array();
+		$failed  = array();
+		$error   = '';
+		$status  = 0;
+
+		foreach ( array_chunk( $groups, self::TAKE_CHUNK, true ) as $chunk ) {
+			$response = WCD_MainWP_API::take_screenshot( array_values( $chunk ), $sc_type, 'manual', self::token(), true, true );
+			if ( ! $response['ok'] ) {
+				// Keep the FIRST failure's message: it is usually the root cause (e.g. 402).
+				if ( '' === $error ) {
+					$error  = 402 === $response['status'] ? __( 'Not enough check credits.', 'webchangedetector-for-mainwp' ) : (string) $response['error'];
+					$status = (int) $response['status'];
+				}
+				$failed = array_merge( $failed, array_keys( $chunk ) );
+				continue;
+			}
+
+			$data = self::unwrap( $response['data'] );
+			$map  = ( is_array( $data ) && ! empty( $data['batches'] ) && is_array( $data['batches'] ) ) ? $data['batches'] : null;
+
+			foreach ( $chunk as $site_id => $group_id ) {
+				if ( null !== $map ) {
+					$batch = isset( $map[ $group_id ] ) ? (string) $map[ $group_id ] : '';
+				} else {
+					$batch = ( is_array( $data ) && ! empty( $data['batch'] ) ) ? (string) $data['batch'] : '';
+				}
+				if ( '' === $batch ) {
+					// Skipped by the API inside an otherwise successful chunk: make sure the
+					// caller still has a message to show (the old per-site call surfaced a 402).
+					if ( '' === $error ) {
+						$error = __( 'Some checks could not be started: not enough credits or no URLs selected.', 'webchangedetector-for-mainwp' );
+					}
+					$failed[] = $site_id;
+					continue;
+				}
+				$batches[ $site_id ] = $batch;
+			}
+		}
+
+		return array(
+			'batches' => $batches,
+			'failed'  => $failed,
+			'error'   => $error,
+			'status'  => $status,
+		);
 	}
 
 	/**
@@ -431,7 +530,11 @@ class WCD_MainWP_Ajax {
 	 */
 	public static function run_update(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$result = WCD_MainWP_Update_Flow::trigger_site_update( self::site_id() );
+		$site_id = self::site_id();
+		// Keep the tracked run alive: a single site's synchronous update can take minutes with no
+		// polling in between, and must not make the run look abandoned to another tab.
+		WCD_MainWP_Update_Flow::touch_run();
+		$result = WCD_MainWP_Update_Flow::trigger_site_update( $site_id );
 
 		if ( ! $result['ok'] ) {
 			wp_send_json_error(
@@ -441,6 +544,10 @@ class WCD_MainWP_Ajax {
 				)
 			);
 		}
+
+		// The site's updates ran; its post screenshots are now due (resume picks this up if the
+		// browser disappears before take_post).
+		WCD_MainWP_Update_Flow::record_site_updated( $site_id );
 
 		wp_send_json_success(
 			array(
@@ -457,6 +564,8 @@ class WCD_MainWP_Ajax {
 	 */
 	public static function poll(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		// A polling browser is actively driving the run; keep the tracked state fresh.
+		WCD_MainWP_Update_Flow::touch_run();
 
 		// The unified run polls all of a phase's batches at once: accept batches[] and aggregate, with
 		// single `batch` kept for backward compatibility.
@@ -468,19 +577,33 @@ class WCD_MainWP_Ajax {
 		}
 		$batches = array_values( array_unique( $batches ) );
 		if ( empty( $batches ) ) {
-			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		$bucket = static function ( $counts ): array {
-			$counts = is_array( $counts ) ? $counts : array();
+		// The run's PRE batches (optional, sent during POST-phase polls). Only their failed count is
+		// used: a check whose pre screenshot failed never gets a comparison, so without it the derived
+		// processing count below could never reach zero.
+		$pre_batches = array();
+		if ( isset( $_POST['pre_batches'] ) && is_array( $_POST['pre_batches'] ) ) {
+			$pre_batches = array_filter( array_map( 'sanitize_text_field', wp_unslash( $_POST['pre_batches'] ) ) );
+		}
+		$pre_batches = array_values( array_diff( array_unique( $pre_batches ), $batches ) );
 
-			return array(
-				'queue'      => (int) ( $counts['open'] ?? 0 ),
-				'processing' => (int) ( $counts['processing'] ?? 0 ),
-				'done'       => (int) ( $counts['done'] ?? 0 ),
-				'failed'     => (int) ( $counts['failed'] ?? 0 ),
-			);
-		};
+		// One meta-only call for all batches: the queues endpoint pre-aggregates per-batch status
+		// counts (incl. the by_type breakdown) in `meta`, so we only need the meta, not the items:
+		// per_page=1 keeps the payload tiny.
+		$response = WCD_MainWP_API::get_queues( array_merge( $batches, $pre_batches ), '', self::token(), 1 );
+		if ( ! $response['ok'] ) {
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$meta            = ( is_array( $response['data'] ) && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
+		$counts_by_batch = ( isset( $meta['status_counts_by_batch'] ) && is_array( $meta['status_counts_by_batch'] ) ) ? $meta['status_counts_by_batch'] : array();
+		if ( empty( $counts_by_batch ) && 1 === count( $batches ) && empty( $pre_batches ) && isset( $meta['status_counts'] ) && is_array( $meta['status_counts'] ) ) {
+			// Single-batch back-compat only: the global status_counts is for this one batch. Never
+			// reuse it across multiple batches (it would multiply the aggregate).
+			$counts_by_batch = array( $batches[0] => $meta['status_counts'] );
+		}
 
 		$aggregate = array(
 			'queue'      => 0,
@@ -490,30 +613,25 @@ class WCD_MainWP_Ajax {
 		);
 		$per_batch = array();
 		foreach ( $batches as $batch ) {
-			// The queues endpoint pre-aggregates per-batch status counts in `meta`, so we only need the
-			// meta, not the items: per_page=1 keeps the payload tiny.
-			$response = WCD_MainWP_API::get_queues( $batch, '', self::token(), 1 );
-			if ( ! $response['ok'] ) {
-				wp_send_json_error( array( 'message' => $response['error'] ) );
-			}
-
-			$meta = ( is_array( $response['data'] ) && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
-			if ( isset( $meta['status_counts_by_batch'][ $batch ] ) && is_array( $meta['status_counts_by_batch'][ $batch ] ) ) {
-				$by_batch = $meta['status_counts_by_batch'][ $batch ];
-			} elseif ( 1 === count( $batches ) && isset( $meta['status_counts'] ) && is_array( $meta['status_counts'] ) ) {
-				// Single-batch back-compat only: the global status_counts is for this one batch. Never
-				// reuse it across multiple batches (it would multiply the aggregate).
-				$by_batch = $meta['status_counts'];
-			} else {
-				$by_batch = array();
-			}
-
-			$b                   = $bucket( $by_batch );
+			$b                   = self::batch_bucket( $counts_by_batch[ $batch ] ?? array() );
 			$per_batch[ $batch ] = $b;
 			foreach ( $aggregate as $key => $val ) {
 				$aggregate[ $key ] = $val + $b[ $key ];
 			}
 		}
+
+		// Checks whose PRE screenshot failed have no pair, so the API never creates their comparison:
+		// count them as failed instead of leaving them in processing forever (mirrors the webapp).
+		// Accepted edge (same tradeoff as the webapp): the API pairs against the latest DONE pre
+		// across batches, so a re-check after a pre failure can still get a late comparison that
+		// this shift settles as failed one tick too early; the Change Detections page stays correct.
+		$pre_failed = 0;
+		foreach ( $pre_batches as $batch ) {
+			$pre_failed += (int) ( $counts_by_batch[ $batch ]['failed'] ?? 0 );
+		}
+		$shift                    = min( $pre_failed, $aggregate['processing'] );
+		$aggregate['processing'] -= $shift;
+		$aggregate['failed']     += $shift;
 
 		$remaining = $aggregate['queue'] + $aggregate['processing'];
 		$finished  = $aggregate['done'] + $aggregate['failed'];
@@ -534,6 +652,49 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
+	 * Shape one batch's queue status counts into the run card's bucket.
+	 *
+	 * A POST batch holds TWO queue rows per check: the post screenshot and its comparison, which the
+	 * API spawns asynchronously as each screenshot finishes. Raw counts therefore double-count the
+	 * run (and can report "complete" in the gap before the comparisons exist). So when a batch has
+	 * post/compare rows, count checks instead (mirrors the webapp's on-demand cards): total = post
+	 * screenshot rows, done = finished comparisons, processing = derived remainder. Screenshot-only
+	 * batches (PRE phase) keep their raw counts.
+	 *
+	 * @param mixed $counts One batch's entry from the queues endpoint's `status_counts_by_batch`.
+	 * @return array Bucket with queue/processing/done/failed.
+	 */
+	private static function batch_bucket( $counts ): array {
+		$counts  = is_array( $counts ) ? $counts : array();
+		$by_type = ( isset( $counts['by_type'] ) && is_array( $counts['by_type'] ) ) ? $counts['by_type'] : array();
+		$post    = ( isset( $by_type['post'] ) && is_array( $by_type['post'] ) ) ? $by_type['post'] : array();
+		$compare = ( isset( $by_type['compare'] ) && is_array( $by_type['compare'] ) ) ? $by_type['compare'] : array();
+
+		$sum        = static fn( array $c ): int => (int) ( $c['open'] ?? 0 ) + (int) ( $c['processing'] ?? 0 ) + (int) ( $c['done'] ?? 0 ) + (int) ( $c['failed'] ?? 0 );
+		$post_total = $sum( $post );
+
+		if ( 0 === $post_total + $sum( $compare ) ) {
+			return array(
+				'queue'      => (int) ( $counts['open'] ?? 0 ),
+				'processing' => (int) ( $counts['processing'] ?? 0 ),
+				'done'       => (int) ( $counts['done'] ?? 0 ),
+				'failed'     => (int) ( $counts['failed'] ?? 0 ),
+			);
+		}
+
+		$queue  = (int) ( $post['open'] ?? 0 );
+		$done   = (int) ( $compare['done'] ?? 0 );
+		$failed = min( (int) ( $post['failed'] ?? 0 ) + (int) ( $compare['failed'] ?? 0 ), max( 0, $post_total - $done - $queue ) );
+
+		return array(
+			'queue'      => $queue,
+			'processing' => max( 0, $post_total - $done - $failed - $queue ),
+			'done'       => $done,
+			'failed'     => $failed,
+		);
+	}
+
+	/**
 	 * Return the shaped comparison results for a batch.
 	 *
 	 * @return void
@@ -542,7 +703,7 @@ class WCD_MainWP_Ajax {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
 		$batch = isset( $_POST['batch'] ) ? sanitize_text_field( wp_unslash( $_POST['batch'] ) ) : '';
 		if ( '' === $batch ) {
-			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
 		$response = WCD_MainWP_API::get_comparisons(
@@ -572,7 +733,7 @@ class WCD_MainWP_Ajax {
 		$valid  = array( 'ok', 'to_fix', 'false_positive' );
 
 		if ( '' === $id || ! in_array( $status, $valid, true ) ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid comparison or status.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid comparison or status.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
 		$response = WCD_MainWP_API::update_comparison( $id, $status, self::token() );
@@ -583,11 +744,12 @@ class WCD_MainWP_Ajax {
 		wp_send_json_success( array( 'status' => $status ) );
 	}
 
-	/* ────────────────────── Change Detections overview ─────────────────── */
+	/* ─────────────────────── Visual Checks overview ─────────────────────── */
 
 	/**
 	 * Render the runs list (batch or flat view) for the given filters. Returns rendered HTML
-	 * fragments ({ html, pagination }) which the JS swaps in.
+	 * fragments ({ html, pagination }) which the JS swaps in. The source is fixed to On-Demand
+	 * (manual) server-side; there is no type filter.
 	 */
 	public static function runs_render(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
@@ -597,7 +759,6 @@ class WCD_MainWP_Ajax {
 			'page'            => isset( $_POST['page'] ) ? (int) $_POST['page'] : 1,
 			'from'            => isset( $_POST['from'] ) ? sanitize_text_field( wp_unslash( $_POST['from'] ) ) : '',
 			'to'              => isset( $_POST['to'] ) ? sanitize_text_field( wp_unslash( $_POST['to'] ) ) : '',
-			'source'          => isset( $_POST['source'] ) ? sanitize_text_field( wp_unslash( $_POST['source'] ) ) : '',
 			'status'          => isset( $_POST['status'] ) ? sanitize_text_field( wp_unslash( $_POST['status'] ) ) : '',
 			'difference_only' => ! empty( $_POST['difference_only'] ) && 'false' !== $_POST['difference_only'],
 			'site_ids'        => ( isset( $_POST['site_ids'] ) && is_array( $_POST['site_ids'] ) ) ? array_map( 'intval', wp_unslash( $_POST['site_ids'] ) ) : array(),
@@ -619,7 +780,7 @@ class WCD_MainWP_Ajax {
 
 		$batch = isset( $_POST['batch'] ) ? sanitize_text_field( wp_unslash( $_POST['batch'] ) ) : '';
 		if ( '' === $batch ) {
-			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Missing batch id.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
 		$response = WCD_MainWP_API::get_comparisons(
@@ -637,6 +798,184 @@ class WCD_MainWP_Ajax {
 
 		$comparisons = WCD_MainWP_Update_Flow::extract_urls( $response['data'] );
 		wp_send_json_success( array( 'html' => WCD_MainWP_Runs_View::render_comparisons_table( $comparisons, false ) ) );
+	}
+
+	/* ───────────────────────── Run state (resume) ──────────────────────── */
+
+	/**
+	 * Start tracking a run server-side. The payload carries the per-site name + check count the
+	 * resume card needs later (the browser already has them from the preflight).
+	 *
+	 * @return void
+	 */
+	public static function run_start(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+
+		// Parallel arrays (site_ids[i] <-> names[i] <-> checks[i]), sanitized per field. A JSON
+		// blob would have to be sanitized as a whole string, which mangles site names containing
+		// e.g. a "<".
+		$ids    = ( isset( $_POST['site_ids'] ) && is_array( $_POST['site_ids'] ) ) ? array_map( 'intval', wp_unslash( $_POST['site_ids'] ) ) : array();
+		$names  = ( isset( $_POST['names'] ) && is_array( $_POST['names'] ) ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['names'] ) ) : array();
+		$checks = ( isset( $_POST['checks'] ) && is_array( $_POST['checks'] ) ) ? array_map( 'intval', wp_unslash( $_POST['checks'] ) ) : array();
+
+		$sites = array();
+		foreach ( array_values( $ids ) as $i => $site_id ) {
+			if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+				continue;
+			}
+			$sites[ $site_id ] = array(
+				'site_id' => $site_id,
+				'name'    => (string) ( array_values( $names )[ $i ] ?? '' ),
+				'checks'  => (int) ( array_values( $checks )[ $i ] ?? 0 ),
+			);
+		}
+
+		if ( empty( $sites ) ) {
+			wp_send_json_error( array( 'message' => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		WCD_MainWP_Update_Flow::start_run( $sites );
+		wp_send_json_success( array( 'tracking' => true ) );
+	}
+
+	/**
+	 * Report whether an abandoned run with missing post screenshots exists (drives the resume
+	 * notice on page load). Cheap: one option read, no API calls.
+	 *
+	 * @return void
+	 */
+	public static function run_status(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+
+		$state = WCD_MainWP_Update_Flow::run_state();
+		if ( empty( $state['sites'] ) ) {
+			wp_send_json_success( array( 'active' => false ) );
+		}
+
+		$missing = WCD_MainWP_Update_Flow::missing_post_sites( $state );
+		$stale   = WCD_MainWP_Update_Flow::run_is_stale( $state );
+
+		// A stale run with nothing to resume (e.g. the tab died during PRE, before any update ran)
+		// is just leftover state: clean it up instead of carrying it forever.
+		if ( $stale && empty( $missing ) ) {
+			WCD_MainWP_Update_Flow::clear_run();
+			wp_send_json_success( array( 'active' => false ) );
+		}
+
+		wp_send_json_success(
+			array(
+				'active'       => true,
+				'stale'        => $stale,
+				'phase'        => (string) ( $state['phase'] ?? '' ),
+				'missing_post' => $missing,
+			)
+		);
+	}
+
+	/**
+	 * Resume an abandoned run: dispatch the post screenshots for every updated site that is still
+	 * missing one, hand back all post batches (existing + new) for the card to poll, and stop
+	 * tracking the run (everything left finishes server-side).
+	 *
+	 * @return void
+	 */
+	public static function run_resume_post(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+
+		$state   = WCD_MainWP_Update_Flow::run_state();
+		$updated = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? array_map( 'intval', $state['updated_sites'] ) : array();
+		if ( empty( $state['sites'] ) || empty( $updated ) ) {
+			wp_send_json_error( array( 'message' => __( 'No interrupted run to resume.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$existing    = isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? $state['post_batches'] : array();
+		$pre_state   = isset( $state['pre_batches'] ) && is_array( $state['pre_batches'] ) ? $state['pre_batches'] : array();
+		$batches     = array();
+		$pre_batches = array();
+		$sites       = array();
+		$need        = array();
+		$skipped     = 0;
+		$error       = '';
+		foreach ( $updated as $site_id ) {
+			$batch = isset( $existing[ $site_id ] ) ? (string) $existing[ $site_id ] : '';
+			if ( '' !== $batch ) {
+				$batches[ $site_id ] = $batch;
+				continue;
+			}
+			$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+			if ( '' === $group_id ) {
+				// No group mapping anymore (site disabled mid-run): permanently unresumable,
+				// so it must neither keep the state alive nor resurface the notice.
+				continue;
+			}
+			$need[ $site_id ] = $group_id;
+		}
+
+		if ( ! empty( $need ) ) {
+			// One chunked batch-per-group call for all missing sites instead of one take call each.
+			$result = self::take_batches_for_sites( $need, 'post' );
+			foreach ( $result['batches'] as $site_id => $batch ) {
+				$batches[ $site_id ] = (string) $batch;
+			}
+			$skipped = count( $result['failed'] );
+			$error   = $result['error'];
+		}
+
+		foreach ( $updated as $site_id ) {
+			if ( ! isset( $batches[ $site_id ] ) ) {
+				continue;
+			}
+			if ( ! empty( $pre_state[ $site_id ] ) ) {
+				$pre_batches[ $site_id ] = (string) $pre_state[ $site_id ];
+			}
+			$sites[] = $state['sites'][ $site_id ] ?? array(
+				'site_id' => $site_id,
+				'name'    => '',
+				'checks'  => 0,
+			);
+		}
+
+		if ( empty( $batches ) ) {
+			if ( '' === $error ) {
+				// Every site was unresumable (no group mapping): drop the state for good.
+				WCD_MainWP_Update_Flow::clear_run();
+				wp_send_json_error( array( 'message' => __( 'Nothing to resume: the sites are no longer enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
+			}
+			// A retryable failure (e.g. credits): keep the tracked run so the user can retry.
+			wp_send_json_error( array( 'message' => $error ) );
+		}
+
+		if ( 0 === $skipped ) {
+			WCD_MainWP_Update_Flow::clear_run();
+		} else {
+			// Partial success: persist the dispatched batches so a later retry resumes only what
+			// is still missing (the staleness gate delays the next offer; acceptable for this
+			// rare path). The warning tells the user what failed.
+			foreach ( $batches as $sid => $batch_id ) {
+				WCD_MainWP_Update_Flow::record_post_batch( (int) $sid, (string) $batch_id );
+			}
+		}
+
+		wp_send_json_success(
+			array(
+				'sites'       => $sites,
+				'batches'     => $batches,
+				// The resumed sites' PRE batches, so the POST-phase poll can count pre failures.
+				'pre_batches' => $pre_batches,
+				'warning'     => ( $skipped > 0 && '' !== $error ) ? $error : '',
+			)
+		);
+	}
+
+	/**
+	 * Discard the tracked (abandoned) run.
+	 *
+	 * @return void
+	 */
+	public static function run_discard(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		WCD_MainWP_Update_Flow::clear_run();
+		wp_send_json_success( array( 'discarded' => true ) );
 	}
 
 	/* ────────────────────────────── Internals ──────────────────────────── */

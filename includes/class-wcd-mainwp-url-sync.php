@@ -54,7 +54,7 @@ class WCD_MainWP_Url_Sync {
 		if ( ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
 			return array(
 				'ok'    => false,
-				'error' => __( 'Site is not enabled for checks.', 'webchangedetector' ),
+				'error' => __( 'Site is not enabled for checks.', 'webchangedetector-for-mainwp' ),
 				'count' => 0,
 			);
 		}
@@ -63,7 +63,7 @@ class WCD_MainWP_Url_Sync {
 		if ( '' === $domain ) {
 			return array(
 				'ok'    => false,
-				'error' => __( 'No domain stored for this site.', 'webchangedetector' ),
+				'error' => __( 'No domain stored for this site.', 'webchangedetector-for-mainwp' ),
 				'count' => 0,
 			);
 		}
@@ -84,7 +84,7 @@ class WCD_MainWP_Url_Sync {
 		if ( empty( $payload ) ) {
 			return array(
 				'ok'    => false,
-				'error' => __( 'No URLs found on the child site. Is it connected?', 'webchangedetector' ),
+				'error' => __( 'No URLs found on the child site. Is it connected?', 'webchangedetector-for-mainwp' ),
 				'count' => 0,
 			);
 		}

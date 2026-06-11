@@ -1,76 +1,41 @@
-/* WebChange Detector MainWP add-on: "Change Detections" overview page.
+/* WebChange Detector MainWP add-on: "Visual Checks" overview page.
 
-   Leans on MainWP's native Fomantic UI (ui header / segment / label / table / message / button /
-   buttons) so it themes for light AND dark automatically. Only layout glue and theme-neutral accents
-   live here: no hardcoded light surfaces or text colours (those broke on the dark theme). Text uses
-   `inherit` / `opacity`, surfaces come from `.ui.segment`, and the shared `.wcd-muted` helper (defined
-   in wcd-mainwp.css, which is always enqueued first) covers muted copy. No inline styles. */
+   Leans on MainWP's native Fomantic UI (ui form / dropdown / table / label / message / button) so
+   it themes for light AND dark automatically. Only layout glue and theme-neutral accents live
+   here: no hardcoded surfaces or text colours. Text uses `inherit` / `opacity`; the shared
+   `.wcd-muted` helper (defined in wcd-mainwp.css, always enqueued first) covers muted copy.
+   No inline styles. */
 
-.wcd-runs { --wcd-accent: #2f6bed; }
+/* ── Filter bar (native ui mini form + selection dropdowns; only layout glue here) ── */
+/* Flex keeps every control (dropdowns, date inputs, buttons) on one vertical center line. */
+.wcd-runs .wcd-runs-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.wcd-runs .wcd-runs-filters .ui.selection.dropdown { min-width: 11em; margin: 0; text-align: left; }
+.wcd-runs .wcd-runs-filters .ui.button { margin: 0; }
+.wcd-runs .wcd-runs-daterange { display: inline-flex; align-items: center; gap: 6px; }
+.wcd-runs .wcd-runs-daterange[hidden] { display: none; }
+.wcd-runs .wcd-runs-daterange input[type="date"] { width: auto; margin: 0; }
 
-/* ── Filter bar (bespoke multi-select popovers; Fomantic has no drop-in) ─── */
-/* Scoped under .wcd-runs so the flex layout wins over Fomantic's `.ui.segment { display:block }`. */
-.wcd-runs .wcd-runs-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0; }
-
-.wcd-runs .wcd-filter-pill-wrap { position: relative; }
-.wcd-runs .wcd-filter-pill {
-    display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px;
-    background: transparent; color: inherit; border: 1px solid rgba(128, 128, 128, .35);
-    border-radius: 8px; font-size: 13px; line-height: 1; white-space: nowrap; cursor: pointer;
-    transition: border-color .15s ease, box-shadow .15s ease;
-}
-.wcd-runs .wcd-filter-pill:hover,
-.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-filter-pill { border-color: var(--wcd-accent); }
-.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-filter-pill { box-shadow: 0 0 0 3px rgba(47, 107, 237, .18); }
-.wcd-runs .wcd-filter-pill > .dashicons:first-child { font-size: 16px; width: 16px; height: 16px; opacity: .7; }
-.wcd-runs .wcd-pill-label { text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 600; opacity: .65; }
-.wcd-runs .wcd-pill-value { font-weight: 600; }
-.wcd-runs .wcd-pill-caret { font-size: 14px; width: 14px; height: 14px; opacity: .6; transition: transform .15s ease; }
-.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-pill-caret { transform: rotate(180deg); }
-
-/* Popover surface comes from `.ui.segment` in the markup; only position + sizing here. */
-.wcd-runs .wcd-filter-popover { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 240px; margin: 0; }
-.wcd-runs .wcd-filter-pill-wrap.is-open .wcd-filter-popover { display: block; }
-.wcd-runs .wcd-filter-native,
-.wcd-runs .wcd-filter-multi { width: 100%; min-width: 200px; }
-.wcd-runs .wcd-date-field { display: block; margin: 8px 0; font-size: 13px; }
-.wcd-runs .wcd-date-field input { margin-left: 6px; }
-.wcd-runs .wcd-date-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-.wcd-runs .wcd-popover-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
-.wcd-runs-view-toggle { margin-left: auto; }
-
-/* ── Batch (accordion) cards — `.ui.segment` is the themed surface ─────── */
+/* ── Batch accordion table (native MainWP updates-table pattern) ───────── */
 .wcd-runs-list { margin-top: 8px; }
-.wcd-runs-batch { margin-bottom: 10px; }
-.wcd-runs-batch.is-open { border-color: var(--wcd-accent); }
-.wcd-runs-batch-head { display: flex; align-items: center; gap: 16px; cursor: pointer; }
-.wcd-runs-caret { flex: none; opacity: .6; transition: transform .15s ease; }
-.wcd-runs-batch.is-open .wcd-runs-caret { transform: rotate(90deg); }
-.wcd-runs-col { min-width: 0; }
-.wcd-runs-col > strong { display: block; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; opacity: .6; }
-.wcd-runs-col-status { flex: 0 0 auto; }
-.wcd-runs-col-name { flex: 2 1 220px; }
-.wcd-runs-col-date { flex: 1 1 140px; font-size: 13px; }
-.wcd-runs-col-summary { flex: 2 1 220px; }
-.wcd-runs .wcd-cd-name { font-size: 15px; font-weight: 700; }
-.wcd-runs .wcd-cd-subtitle,
-.wcd-runs .wcd-cd-websites { display: block; font-size: 13px; opacity: .8; }
-.wcd-runs .wcd-cd-websites { margin-top: 2px; word-break: break-word; }
-.wcd-runs-batch-body { margin-top: 10px; }
-.wcd-runs-loading { padding: 28px; text-align: center; }
-.wcd-status-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.wcd-runs-table .wcd-runs-batch-head { cursor: pointer; }
+.wcd-runs-table .accordion-trigger i.icon { opacity: .6; }
+/* Fomantic's stackable table forces `display` on rows at mobile widths, which would defeat the
+   hidden attribute of collapsed accordion rows. */
+.wcd-runs-table tr[hidden] { display: none !important; }
+.wcd-runs .wcd-status-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.wcd-runs .wcd-ai-summary-text { opacity: .85; }
 
-/* ── Comparison table — `.ui.table` themes; only small accents here ────── */
+/* ── Comparison table: only small accents (the `ui table` itself themes) ── */
 .wcd-runs .wcd-url-link { font-weight: 600; }
 .wcd-runs .wcd-url-path { font-size: 12px; opacity: .65; word-break: break-all; }
 .wcd-runs .wcd-compared-row { display: flex; align-items: baseline; gap: 6px; }
 .wcd-runs .wcd-ba-label { min-width: 42px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; opacity: .6; }
 .wcd-runs .screenshot-date { font-size: 13px; }
-.wcd-runs .wcd-visual-percentage { font-size: 16px; font-weight: 800; }
+.wcd-runs .wcd-visual-percentage { font-size: 15px; font-weight: 700; }
 .wcd-runs .wcd-visual-percentage.wcd-vc-sev-low { color: #e0a106; }
 .wcd-runs .wcd-visual-percentage.wcd-vc-sev-high { color: #d8463c; }
+.wcd-runs-loading { padding: 28px; text-align: center; }
 
 /* ── Pagination ───────────────────────────────────────────────────────── */
 .wcd-runs-pagination-wrap { margin-top: 14px; }
 .wcd-runs-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.wcd-runs-page-info { font-size: 13px; opacity: .8; }

@@ -1,0 +1,12 @@
+# Files excluded from the wordpress.org distribution (wp dist-archive / SVN).
+.distignore
+.git
+.gitignore
+.docs
+.wp-env.json
+.wp-env.override.json
+composer.lock
+phpcs.xml.dist
+vendor
+README.md
+node_modules

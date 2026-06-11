@@ -30,15 +30,26 @@ Both are wrapped in `class_exists`/`method_exists` guards; if a future MainWP re
 feature degrades to a notice (and the after-update hook still drives post screenshots) instead of a
 fatal.
 
+## wordpress.org release
+
+The plugin is prepared for the wordpress.org directory: slug + folder + main file + text domain are
+all **`webchangedetector-for-mainwp`** ("X for MainWP" naming; a slug starting with `mainwp` would
+violate trademark guideline 17). `readme.txt` carries the required external-service disclosure
+(api.webchangedetector.com + ToS/privacy links), the header declares GPLv2-or-later (LICENSE file
+matches), `Requires Plugins: mainwp`, and `.distignore` excludes the dev files from the
+distribution. No API call is ever made before the user has configured a token (guideline 7).
+
 ## Plugin Structure
 
 ```
-mainwp-addon/
-├── webchangedetector-mainwp.php   # Entry: header + constants (WCD_MAINWP_VERSION, *_FILE/_PATH/_URL)
-├── uninstall.php                  # Cleans options + cached account
+webchangedetector-for-mainwp/
+├── webchangedetector-for-mainwp.php  # Entry: full wp.org header + constants (WCD_MAINWP_VERSION, *_FILE/_PATH/_URL)
+├── uninstall.php                  # Cleans options + transients (token, site map, auto-enable, caches)
+├── readme.txt                     # wordpress.org readme (external-service disclosure, FAQ, changelog)
+├── .distignore                    # Files excluded from the wp.org distribution
 │   # Class files follow the WordPress convention class-{lowercased-class-name}.php.
 ├── includes/
-│   ├── class-wcd-mainwp-bootstrap.php      # Wires MainWP hooks, enqueues assets, injects entry points
+│   ├── class-wcd-mainwp-bootstrap.php      # Wires MainWP hooks, enqueues assets, injects entry points, left-menu item
 │   ├── class-wcd-mainwp-options.php        # Network-aware option/transient storage
 │   ├── class-wcd-mainwp-api.php            # WCD API v2 HTTP client (normalized results)
 │   ├── class-wcd-mainwp-site-map.php       # MainWP site <-> WCD website/group mapping + domain normalization
@@ -46,17 +57,18 @@ mainwp-addon/
 │   ├── class-wcd-mainwp-url-sync.php       # Fetch child URLs (posts hook + pages guarded) -> two-step sync
 │   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + after-update hook safety-net + pending-update counts
 │   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview)
-│   ├── class-wcd-mainwp-runs-view.php      # "Change Detections" overview page (filters + batch/list rendering)
-│   └── class-wcd-mainwp-widget.php         # Dashboard widget (account/credits)
+│   ├── class-wcd-mainwp-runs-view.php      # "Visual Checks" overview page (filters + batch/list rendering)
+│   └── class-wcd-mainwp-widget.php         # Dashboard widget (plan/credits/renewal/active sites)
 ├── templates/
 │   ├── admin-page.php             # Extension settings page shell
-│   ├── settings-page.php          # Token + auto-enable toggle + account/credits card + per-site URL config
+│   ├── settings-page.php          # Token + auto-enable toggle + account/credits card (sites/URLs moved to the Settings tab)
 │   ├── site-tab.php               # Per-site tab: status + safe-update entry (disabled when no updates)
 │   ├── entry-banner.php           # Hero banner (dashboard + child-site overview + Updates page) -> safe-update flow
-│   ├── runs-view.php              # Change Detections overview shell (filter bar + results container)
+│   ├── runs-view.php              # Visual Checks overview shell (native MainWP chrome + Fomantic filter bar)
+│   ├── sites-settings-page.php    # Visual Checks "Settings" tab: enable sites + URL selection
 │   └── widget.php                 # Dashboard widget body
 ├── assets/css/wcd-mainwp.css      # Component styles (+ .wcd-w-* width steps, no inline CSS)
-├── assets/css/wcd-runs.css        # Change Detections overview styles (scoped to .wcd-runs)
+├── assets/css/wcd-runs.css        # Visual Checks overview styles (scoped to .wcd-runs)
 └── assets/js/wcd-mainwp.js        # Settings + safe-update orchestrator + results + runs overview
 ```
 
@@ -67,8 +79,9 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 | Hook | Purpose |
 |------|---------|
 | `mainwp_getextensions` | Register extension + settings page + icon |
-| `mainwp_getsubpages_sites` | Per-site tab `WcdVisualRegressionTesting` + dashboard "Change Detections" page `WcdChangeDetections` |
-| `mainwp_getmetaboxes` | Dashboard widget `wcd-checks-widget` |
+| `mainwp_getsubpages_sites` | Per-site tab `WcdVisualRegressionTesting` + the "Visual Checks" page `WcdVisualChecks` + its "Settings" tab `WcdVisualChecksSettings` (both menu_hidden) |
+| `mainwp_menu_extensions_left_menu` | Places the "Visual Checks" entry inside the left menu's Monitoring category group |
+| `mainwp_getmetaboxes` | Dashboard widget `wcd-checks-widget` (plan, credits bar, renewal countdown, active sites, quick links) |
 | `mainwp_getdbsites` / `mainwp_extension_enabled_check` | List managed sites + the extension key |
 | `mainwp_site_synced` | After a child syncs -> sync its URLs to the WCD group |
 | `mainwp_added_new_site` | Auto-enable a newly added child site for WCD (opt-out via the settings toggle) |
@@ -80,11 +93,14 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 ## Settings & Storage
 
 - API token option: **`wcd_api_token`** (network-aware via `WCD_MainWP_Options`). Verified on save by
-  calling `/account`; the account is cached in the `wcd_account_details` transient (5 min).
+  calling `/account`; the account is cached in the `wcd_mainwp_account_details` transient (5 min; own prefix so it never collides with the customer plugin's `wcd_account_details` on the same site).
 - Site map option: **`wcd_site_map`** = `{ site_id: { website_uuid, manual_group_uuid,
   auto_group_uuid, domain, enabled } }`. The `domain` is normalized once (scheme + trailing slash
   stripped, www + path kept) and reused verbatim for every WCD call (the API resolves websites by
   exact domain match).
+- Active-run state: **`wcd_mainwp_active_run`** = the tracked safe-update run (sites, phase,
+  pre/post batches, updated sites, last_activity) used for the resume flow; cleared when the run's
+  post phase is fully dispatched.
 - Auto-enable option: **`wcd_auto_enable_sites`** (`'1'`/`'0'`, default ON). When on, the
   `mainwp_added_new_site` hook auto-provisions + enables each newly added child site (and syncs its
   URLs). Each enabled site provisions WCD resources that count against the plan, hence the opt-out.
@@ -97,8 +113,9 @@ constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-plugin`. Ever
 `['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`.
 
 Methods: `get_account`, `list_groups`, `create_group`, `get_group_urls`, `update_url_in_group`,
-`update_urls_in_group`, `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`,
-`get_queues`, `get_comparisons`, `get_batch`, `list_batches`, `update_comparison`.
+`update_urls_in_group`, `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
+(supports `batch_per_group`: one batch per group + a group->batch map in the response), `get_queues`,
+`get_comparisons`, `get_batch`, `list_batches`, `update_comparison`.
 
 Vocabulary: data-model terms (`manual`/`monitoring`, `source=manual`) in API calls; UI copy says
 "On-Demand Check". Never expose AI model names (the API strips them server-side).
@@ -117,18 +134,30 @@ overview from the enriched `preflight` AJAX payload: a Sites / Pages / Screensho
 strip, a **credit-coverage** bar (this run uses N checks · M of L available; "Enough credits" /
 "N short" + "Upgrade plan" when short, which also disables Confirm), an expandable **"what gets
 updated"** list (per-site core/plugins/themes items, read from MainWP's own DB upgrade columns), and
-the **per-site URL list** (Desktop/Mobile chips). The API still enforces credit limits server-side
-(returns 402).
+the **per-site URL list** as a lazy accordion: the `preflight` AJAX only fetches the per-site
+selected counts from the group-urls `meta` (per_page=1, like `banner_stats`), and a site's URLs
+(Desktop/Mobile chips) load on first expand via `get_site_urls` — so the popup opens fast even with
+many websites (mirrors the webapp's lazy website accordion). The API still enforces credit limits
+server-side (returns 402).
 
 On confirm the popup closes and the **whole run plays out in ONE unified card rendered inline on the
 page** (the `.wcd-run-host` container right below the launch band; no running modal). The browser is
 the scheduler and orchestrates the phases as **barriers** so every site advances together:
 
-1. **PRE**: `take_pre` for every check-enabled site -> poll all batches aggregated until done.
+1. **PRE**: ONE `take_pre` call with all check-enabled sites -> poll all batches aggregated until done.
 2. **UPDATES**: `run_update` per site (sequential) -> `execute_update_site_*` (guarded, synchronous;
    suppresses the after-update hook so post is not double-fired). A per-site failure (e.g. offline) is
    tolerated; "nothing to update" is success-no-post.
-3. **POST**: `take_post` for every site -> poll aggregated -> `get comparisons` per batch.
+3. **POST**: ONE `take_post` call with all sites -> poll aggregated -> `get comparisons` per batch.
+
+`take_pre`/`take_post` accept `site_ids[]` (single `site_id` still supported) and start everything
+server-side via **chunked batch-per-group take calls** (`TAKE_CHUNK` = 10 sites per API call, like
+the webapp's bulk on-demand start): one API call creates one batch per group and returns the
+group->batch map, instead of one take call per site. Fallbacks per chunk: an older API that ignores
+`batch_per_group` returns one shared batch (all chunk sites map to it; never re-request, that would
+take everything twice); a group missing from the map was skipped by the API (no credits / nothing
+selected) and fails the request AFTER the successful batches were recorded in the run state, so the
+run stays resumable.
 
 The unified card shows a **PRE -> UPDATES -> POST -> DONE** timeline (a fill track + 4 nodes), three
 side-by-side panels (**Pre-update screenshots** and **Post-update screenshots** each with an aggregate
@@ -139,18 +168,36 @@ per-site bars). When the run finishes the footer flips to **"All good" / "N page
 Detections page. The detailed comparison table is no longer rendered in the card; it lives on the
 Change Detections page.
 
-`poll()` accepts **multiple batches** (`batches[]`, single `batch` still supported): it sums the
-queues endpoint's pre-aggregated `meta.status_counts_by_batch` into one aggregate (feeds the Pre/Post
-panels) and also returns a `by_batch` breakdown (feeds each site's `done/total` counter). Dynamic
-widths (timeline fill, credit bar) use the `.wcd-w-*` step utilities, never inline styles.
+`poll()` accepts **multiple batches** (`batches[]`, single `batch` still supported): it fetches the
+queues endpoint's pre-aggregated `meta.status_counts_by_batch` (one call for all batches) and sums
+the per-batch buckets into one aggregate (feeds the Pre/Post panels) plus a `by_batch` breakdown
+(feeds each site's `done/total` counter). A POST batch holds TWO queue rows per check (post
+screenshot + comparison, spawned async per finished screenshot), so raw counts would double-count
+the run; `batch_bucket()` therefore derives check-level counts from the per-batch `by_type`
+breakdown (total = post rows, done = `compare.done`, processing = remainder, mirroring the webapp's
+on-demand cards). POST-phase polls also send the run's PRE batches (`pre_batches[]`): their failed
+count is shifted from processing to failed, because a check whose pre screenshot failed never gets
+a comparison (`run_resume_post` returns them for the resume path). Dynamic widths (timeline fill,
+credit bar) use the `.wcd-w-*` step utilities, never inline styles.
 
-**After-update hook safety-net** (`mainwp_after_*`): for updates started outside our card (cron/native),
-or to recover post when the browser closes mid-run. Deduped per site via a short transient; suppressed
-while the card flow owns the run. Post-only (no reliable pre in a synchronous before-hook).
+**After-update hook safety-net** (`mainwp_after_*`): for updates started outside our card
+(cron/native). Deduped per site via a short transient; suppressed while the card flow owns the run.
+Post-only (no reliable pre in a synchronous before-hook).
+
+**Run-state persistence + resume**: because the browser orchestrates the run, every phase transition
+is also persisted server-side in the `wcd_mainwp_active_run` option (`WCD_MainWP_Update_Flow`
+run-state section): `run_start` (sites + per-site name/checks), `take_pre`/`take_post` record their
+batches, `run_update` records completed sites, `poll` bumps the activity timestamp. Once every run
+site has a post batch the state clears (the rest finishes server-side). If a page later loads while
+a run has installed updates but misses post batches AND has been inactive for 10+ minutes
+(RUN_STALE_AFTER), the JS (`checkResume`) shows a warning message in the run host with two actions:
+**Take post-update screenshots** (`run_resume_post` dispatches the missing post batches server-side,
+clears the state, and the unified card resumes at the POST phase) or **Discard** (`run_discard`).
+So a closed tab between updates and post screenshots no longer loses the run.
 
 Closing the page does NOT abort the flow (the AJAX chains/updates keep running server-side);
-`beforeunload` warns before a tab close while a run is active, and the card's dismiss (X) is disabled
-until the run finishes.
+`beforeunload` warns before a tab close while a run is active, the card's footer says to keep the
+tab open, and the card's dismiss (X) is disabled until the run finishes.
 
 ## Entry points
 
@@ -160,18 +207,42 @@ until the run finishes.
   updates are available). The CTA is disabled when there are no pending updates (the per-site tab
   button too); the unknown count (MainWP DB unavailable) leaves it enabled.
 
-## Change Detections overview
+## Visual Checks overview
 
-`class-wcd-mainwp-runs-view.php` + `templates/runs-view.php` + `assets/css/wcd-runs.css`: a dashboard-wide
-list of runs (batches) under the **Sites** menu (slug `WcdChangeDetections`, `sitetab => false`), modeled on
-the webapp's Change Detections view. Filter bar (period / status / type / website / visual), batch +
-flat list views, pagination, and an inline comparison table per run. Data via
-`WCD_MainWP_API::list_batches` + `get_comparisons`, scoped to the account (the website filter narrows to a
-managed site's manual + auto groups). AJAX `runs_render` (list) + `runs_comparisons` (drill-in) return
-rendered HTML fragments; the filter/accordion JS lives in `wcd-mainwp.js`, guarded by `#wcd-runs`. UI
-copy uses "On-Demand Checks / Monitoring / Auto-Update Checks"; the data model stays
-`manual`/`monitoring`/`auto_update`. The view re-scopes the webapp's CSS tokens locally (no dependency
-on the webapp stylesheet).
+`class-wcd-mainwp-runs-view.php` + `templates/runs-view.php` + `assets/css/wcd-runs.css`: a
+dashboard-wide list of On-Demand runs (batches). Registered as a Sites subpage (slug
+`WcdVisualChecks`, `sitetab => false`, `menu_hidden => true`) and linked from the left menu's
+**Monitoring** category group via `mainwp_menu_extensions_left_menu` (bootstrap). The template wraps
+itself in the native MainWP chrome (`mainwp_pageheader_sites` / `mainwp_pagefooter_sites`).
+
+The Visual Checks area has TWO tabs: **Visual Checks** (runs) and **Settings** (slug
+`WcdVisualChecksSettings`, registered by `WCD_MainWP_Site_Settings`, template
+`sites-settings-page.php`) with the per-site enable toggles + URL selection that used to live on
+the extension settings page. The visible switcher is a native Fomantic **`ui top attached tabular
+menu`** (`WCD_MainWP_Runs_View::render_tabs()`, the same element MainWP's own modules use for
+in-page tabs) with the content in a `bottom attached segment`. NOTE: MainWP 6's Sites
+page-navigation column (`#mainwp-page-navigation-wrapper`) is `display:none` on non-per-site pages
+(only `.mainwp-individual-site-view` shows it), so it CANNOT serve as the switcher here;
+`WCD_MainWP_Runs_View::filter_navigation_items` (`mainwp_manage_sites_navigation_items`) still
+runs to keep our entries out of the per-site navigation, where the column IS visible. The
+extension page (MainWP > Extensions > WebChange Detector) keeps the account-level settings (API
+token, auto-enable, credits card) and links to the Settings tab.
+
+The **source is fixed to `manual` server-side** (`build_api_filters`): only On-Demand Checks appear;
+the account's monitoring/auto-update runs made elsewhere (webapp) are out of scope, so there is no
+type filter and no per-row "On-Demand Check" label. Filter bar = native Fomantic `ui mini form`
+with `ui selection (multiple) dropdown`s (period presets + custom range, status, website, visual) +
+an explicit **Filter** button (MainWP's native apply pattern: control changes only take effect on
+Filter/Reset; pagination + the Runs/List view toggle reuse the applied snapshot) all on one flex
+line; dropdowns are initialized by `wcd-mainwp.js` via MainWP's own Fomantic JS.
+The batch list renders as MainWP's accordion-table pattern (one `tbody` per run: `tr.title` with
+caret / websites / status labels / tooltip timestamp / AI summary + a hidden `tr` whose comparisons
+lazy-load on first open). Data via `WCD_MainWP_API::list_batches` + `get_comparisons`, scoped to the
+account (the website filter narrows to a managed site's manual + auto groups). AJAX `runs_render`
+(list) + `runs_comparisons` (drill-in) return rendered HTML fragments; JS is guarded by `#wcd-runs`.
+Timestamps render with `wp_date()` (dashboard timezone), relative labels with native
+`data-tooltip` attributes. The CSS is layout glue only: surfaces/colors come from Fomantic + the
+MainWP theme, so light/dark both work.
 
 ## Security
 
@@ -180,7 +251,9 @@ on the webapp stylesheet).
   `current_user_can('manage_options')` and sends a 403 on failure. The check is inline (not hidden in a
   helper) so static analysis sees it in each handler's scope — no `phpcs:ignore` is used anywhere.
 - The two request-reading helpers (`site_id()`, `scope_site_ids()`) re-check the nonce before touching
-  `$_POST`, so the read genuinely cannot happen without a valid nonce (defense in depth).
+  `$_POST`, so the read genuinely cannot happen without a valid nonce (defense in depth). Handlers that
+  read `$_POST` directly (e.g. `take_screenshot()`'s `site_ids[]`, `poll()`'s batches) do so only after
+  their inline `check_ajax_referer` call.
 - `admin_post_wcd_save_settings` verifies its nonce + capability.
 - Input sanitized; output escaped; URLs via `esc_url`.
 

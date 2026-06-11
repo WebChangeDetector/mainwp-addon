@@ -413,28 +413,24 @@
             body.appendChild(el('div', { class: 'wcd-pf-updates' }, [toggle, updBody]));
         }
 
-        // per-site URL list
+        // Per-site URL list: lazy. The preflight only carries counts; each site's URLs load on
+        // first expand (same pattern as the webapp's website accordion), so the popup opens fast
+        // even with many websites.
         var list = el('div', { class: 'wcd-pf-urls' });
         checkSites.forEach(function (s) {
-            list.appendChild(el('div', { class: 'wcd-pf-urlshead' }, [
-                el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
-                el('span', { class: 'wcd-pf-urlname', text: s.name }),
-                el('span', { class: 'wcd-pf-urlcount', text: s.urls.length + ' ' + plural(s.urls.length, t('page'), t('pagesPlural')) })
-            ]));
-            (s.urls || []).forEach(function (u) {
-                var vps = el('div', { class: 'wcd-pf-vps' });
-                if (u.desktop) { vps.appendChild(el('span', { class: 'wcd-pf-vp' }, [el('i', { class: 'desktop icon' }), document.createTextNode(t('desktop'))])); }
-                if (u.mobile) { vps.appendChild(el('span', { class: 'wcd-pf-vp' }, [el('i', { class: 'mobile icon' }), document.createTextNode(t('mobile'))])); }
-                list.appendChild(el('div', { class: 'wcd-url-row' }, [
-                    el('div', { class: 'wcd-url-info' }, [
-                        el('div', { class: 'wcd-url-title', text: u.title || u.url }),
-                        el('div', { class: 'wcd-url-path', text: u.url })
-                    ]),
-                    vps
-                ]));
-            });
+            list.appendChild(buildPreflightSite(s));
         });
         body.appendChild(list);
+
+        // Sites whose check counts could not be loaded (API hiccup): they would be updated
+        // WITHOUT visual checks, so say it loudly instead of hiding them among the unchecked.
+        var metaErrors = allSites.filter(function (s) { return s.meta_error; }).length;
+        if (metaErrors > 0) {
+            body.appendChild(el('p', { class: 'wcd-error wcd-pf-note' }, [
+                el('i', { class: 'exclamation triangle icon' }),
+                document.createTextNode(' ' + fmt(1 === metaErrors ? t('metaErrorSingle') : t('metaErrorPlural'), { '%d': String(metaErrors) }))
+            ]));
+        }
 
         // unchecked note
         var unchecked = allSites.length - checkSites.length;
@@ -462,6 +458,51 @@
         confirm.addEventListener('click', function () { closeModal(); startRun(host, trigger, allSites); });
         foot.appendChild(confirm);
         modal.appendChild(foot);
+    }
+
+    // One collapsible preflight site row: header (mark, name, page count, chevron) + a body that
+    // fetches the site's selected URLs once, on first expand.
+    function buildPreflightSite(s) {
+        var chev = el('i', { class: 'chevron down icon wcd-pf-urlchev' });
+        var head = el('button', { class: 'wcd-pf-urlshead', type: 'button' }, [
+            el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
+            el('span', { class: 'wcd-pf-urlname', text: s.name }),
+            el('span', { class: 'wcd-pf-urlcount', text: s.pages + ' ' + plural(s.pages, t('page'), t('pagesPlural')) }),
+            chev
+        ]);
+        var urlsBody = el('div', { class: 'wcd-pf-urlbody' });
+        urlsBody.hidden = true;
+
+        head.addEventListener('click', function () {
+            urlsBody.hidden = !urlsBody.hidden;
+            chev.className = 'chevron ' + (urlsBody.hidden ? 'down' : 'up') + ' icon wcd-pf-urlchev';
+            if (urlsBody.hidden || urlsBody.getAttribute('data-loaded')) { return; }
+            urlsBody.setAttribute('data-loaded', '1');
+            urlsBody.appendChild(el('div', { class: 'ui active inline loader' }));
+            api('get_site_urls', { site_id: s.site_id }).then(function (d) {
+                urlsBody.innerHTML = '';
+                (d.urls || []).filter(function (u) { return u.desktop || u.mobile; }).forEach(function (u) {
+                    var vps = el('div', { class: 'wcd-pf-vps' });
+                    if (u.desktop) { vps.appendChild(el('span', { class: 'wcd-pf-vp' }, [el('i', { class: 'desktop icon' }), document.createTextNode(t('desktop'))])); }
+                    if (u.mobile) { vps.appendChild(el('span', { class: 'wcd-pf-vp' }, [el('i', { class: 'mobile icon' }), document.createTextNode(t('mobile'))])); }
+                    urlsBody.appendChild(el('div', { class: 'wcd-url-row' }, [
+                        el('div', { class: 'wcd-url-info' }, [
+                            el('div', { class: 'wcd-url-title', text: u.title || u.url }),
+                            el('div', { class: 'wcd-url-path', text: u.url })
+                        ]),
+                        vps
+                    ]));
+                });
+                if (!urlsBody.children.length) { urlsBody.appendChild(el('p', { class: 'wcd-muted', text: t('noChecks') })); }
+            }).catch(function (e) {
+                // Allow a retry on the next expand.
+                urlsBody.removeAttribute('data-loaded');
+                urlsBody.innerHTML = '';
+                urlsBody.appendChild(el('p', { class: 'wcd-error', text: e.message }));
+            });
+        });
+
+        return el('div', { class: 'wcd-pf-site' }, [head, urlsBody]);
     }
 
     /* ─── Unified in-card run (PRE → UPDATES → POST → DONE, phased) ──────── */
@@ -509,7 +550,7 @@
             el('div', { class: 'wcd-run__updbody' }, [
                 el('div', { class: 'wcd-run__celllbl', text: t('processing') }),
                 proc,
-                el('div', { class: 'wcd-run__updsub', text: t('corePluginTheme') })
+                el('div', { class: 'wcd-run__updsub', text: t('updatesUnit') })
             ])
         ]);
         return { node: node, pill: pill, proc: proc };
@@ -612,19 +653,32 @@
         Object.keys(batchBySite).forEach(function (sid) {
             var ref = run.siteRefs[sid];
             var b   = byBatch[batchBySite[sid]];
-            if (ref && b) { ref.count.textContent = (b.done || 0) + '/' + ref.total; }
+            // Cap at the site's own total: against an older API several sites can share one
+            // batch (transitional fallback), whose counts cover the whole batch.
+            if (ref && b) { ref.count.textContent = Math.min(b.done || 0, ref.total) + '/' + ref.total; }
         });
     }
 
     // Poll all of a phase's batches at once, feeding aggregate + per-batch counts each tick.
-    function pollBatches(batches, onTick) {
+    // POST-phase polls also pass the run's PRE batches: the server needs their failed count to
+    // settle checks whose pre screenshot failed (their comparison is never created).
+    // The try counter only advances while NOTHING completes, so a big run that is still making
+    // progress never hits the stall timeout; only a genuinely stuck queue does.
+    function pollBatches(batches, onTick, preBatches) {
         batches = (batches || []).filter(Boolean);
         if (!batches.length) { return Promise.resolve(); }
+        preBatches = (preBatches || []).filter(Boolean);
+        var payload = { batches: batches };
+        if (preBatches.length) { payload.pre_batches = preBatches; }
         var tries = 0;
+        var lastFinished = -1;
         function loop() {
-            return api('poll', { batches: batches }).then(function (data) {
+            return api('poll', payload).then(function (data) {
                 if (onTick) { onTick(data); }
-                if (data.complete) { return; }
+                // Resolve with the final tick so callers can render the real done/failed counts.
+                if (data.complete) { return data; }
+                var finished = (data.done || 0) + (data.failed || 0);
+                if (finished !== lastFinished) { lastFinished = finished; tries = 0; }
                 tries++;
                 if (tries >= POLL_MAX_TRIES) { throw new Error(t('stillRunning')); }
                 return delay(POLL_INTERVAL).then(loop);
@@ -658,7 +712,7 @@
     }
 
     function startRun(host, trigger, sites) {
-        if (!host) { return; }
+        if (!host || activeRun) { return; }
         host.innerHTML = '';
         activeRun = true;
         setTriggerRunning(trigger, true);
@@ -668,7 +722,14 @@
         var run = buildRun(host, sites, checkSites, single, total);
         run.trigger = trigger;
         run.dismiss.addEventListener('click', function () { if (!run.dismiss.disabled) { closeRun(run); } });
-        runPhased(run).catch(function (e) { failRun(run, e); });
+        // Track the run server-side so it can be resumed if this tab disappears mid-run.
+        // Best effort: a failed tracking call must not block the run itself.
+        var tracking = api('run_start', {
+            site_ids: checkSites.map(function (s) { return s.site_id; }),
+            names: checkSites.map(function (s) { return s.name; }),
+            checks: checkSites.map(function (s) { return s.checks; })
+        }).catch(function () {});
+        tracking.then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
     }
 
     function runPhased(run) {
@@ -679,16 +740,19 @@
         setPhase(run, 0);
         // Show everything as queued straight away so the panel isn't 0/0/0/0 until the first poll.
         setShot(run.pre, { queue: total, processing: 0, done: 0, failed: 0 });
-        return Promise.all(run.checkSites.map(function (s) {
-            return api('take_pre', { site_id: s.site_id }).then(function (d) { if (d.batch) { preBatchBySite[s.site_id] = d.batch; } });
-        })).then(function () {
+        // ONE bulk call starts the whole phase (the server fans out chunked batch-per-group
+        // take calls), instead of one round trip per site.
+        return api('take_pre', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
+            preBatchBySite = d.batches || {};
+        }).then(function () {
             return pollBatches(values(preBatchBySite), function (data) {
                 setShot(run.pre, data);
                 setSiteCounts(run, preBatchBySite, data.by_batch);
                 setFill(run, (total ? (data.done || 0) / total : 1) / 3);
             });
-        }).then(function () {
-            setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
+        }).then(function (final) {
+            // Render the final poll counts (a failed pre screenshot must stay visible as failed).
+            setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
             // UPDATES
             setPhase(run, 1);
             setFill(run, 1 / 3);
@@ -698,17 +762,23 @@
             setPhase(run, 2);
             setFill(run, 2 / 3);
             setShot(run.post, { queue: total, processing: 0, done: 0, failed: 0 });
-            return Promise.all(run.checkSites.map(function (s) {
-                return api('take_post', { site_id: s.site_id }).then(function (d) { if (d.batch) { postBatchBySite[s.site_id] = d.batch; } });
-            }));
+            return api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
+                postBatchBySite = d.batches || {};
+            });
         }).then(function () {
+            // Every post batch is dispatched, so the run can no longer be lost: stop tracking it
+            // explicitly. The bulk take_post records all batches in one handler, but this clear
+            // stays the authoritative end of tracking. Best effort.
+            api('run_discard', {}).catch(function () {});
+            // Keep the pre batches around: re-check polls compare against the same pre screenshots.
+            run.preBatches = values(preBatchBySite);
             return pollBatches(values(postBatchBySite), function (data) {
                 setShot(run.post, data);
                 setSiteCounts(run, postBatchBySite, data.by_batch);
                 setFill(run, 2 / 3 + (total ? (data.done || 0) / total : 1) / 3);
-            });
-        }).then(function () {
-            setShot(run.post, { queue: 0, processing: 0, done: total, failed: 0 });
+            }, run.preBatches);
+        }).then(function (final) {
+            setShot(run.post, final || { queue: 0, processing: 0, done: total, failed: 0 });
             // DONE
             setPhase(run, 3);
             return collectResults(postBatchBySite);
@@ -741,7 +811,7 @@
             var ref = run.siteRefs[sid];
             var f   = flagged[sid] || 0;
             totalFlagged += f;
-            ref.count.textContent = ref.total + '/' + ref.total;
+            // The counter keeps the last polled done/total (a failed check must not show as done).
             ref.pill.className = 'wcd-run__sitepill ' + (f > 0 ? 'is-flagged' : 'is-clean');
             ref.pill.textContent = f > 0 ? fmt(t('toReview'), { '%d': f }) : t('clean');
         });
@@ -759,9 +829,28 @@
         var recheck = el('button', { class: 'ui button', type: 'button' }, [el('i', { class: 'redo icon' }), document.createTextNode(t('recheck'))]);
         recheck.addEventListener('click', function () { recheckRun(run); });
         run.foot.appendChild(recheck);
-        if (cfg.changeDetectionsUrl) {
-            run.foot.appendChild(el('a', { class: 'ui blue button', href: cfg.changeDetectionsUrl }, [el('i', { class: 'external icon' }), document.createTextNode(t('viewResults'))]));
+        if (cfg.visualChecksUrl) {
+            run.foot.appendChild(el('a', { class: 'ui blue button', href: cfg.visualChecksUrl }, [el('i', { class: 'external icon' }), document.createTextNode(t('viewResults'))]));
         }
+    }
+
+    // Shared POST phase: poll the given post batches, collect the comparisons, finish the card.
+    // Used by the in-run flow's re-check and by the resume of an interrupted run.
+    function runPostPhase(run, postBatchBySite) {
+        setPhase(run, 2);
+        setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
+        setFill(run, 2 / 3);
+        return pollBatches(values(postBatchBySite), function (data) {
+            setShot(run.post, data);
+            setSiteCounts(run, postBatchBySite, data.by_batch);
+            setFill(run, 2 / 3 + (run.total ? (data.done || 0) / run.total : 1) / 3);
+        }, run.preBatches).then(function (final) {
+            setShot(run.post, final || { queue: 0, processing: 0, done: run.total, failed: 0 });
+            setPhase(run, 3);
+            return collectResults(postBatchBySite);
+        }).then(function (flagged) {
+            finishRun(run, flagged);
+        });
     }
 
     // Re-check re-runs only the POST screenshots + comparison for the run's sites.
@@ -779,27 +868,71 @@
         run.foot.innerHTML = '';
         run.foot.appendChild(el('span', { class: 'wcd-muted', text: t('runFooterNote') }));
 
-        var postBatchBySite = {};
         setPhase(run, 2);
         setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
         setFill(run, 2 / 3);
-        Promise.all(run.checkSites.map(function (s) {
-            return api('take_post', { site_id: s.site_id }).then(function (d) { if (d.batch) { postBatchBySite[s.site_id] = d.batch; } });
-        })).then(function () {
-            return pollBatches(values(postBatchBySite), function (data) {
-                setShot(run.post, data);
-                setSiteCounts(run, postBatchBySite, data.by_batch);
-                setFill(run, 2 / 3 + (run.total ? (data.done || 0) / run.total : 1) / 3);
-            });
-        }).then(function () {
-            setShot(run.post, { queue: 0, processing: 0, done: run.total, failed: 0 });
-            setPhase(run, 3);
-            return collectResults(postBatchBySite);
-        }).then(function (flagged) {
-            finishRun(run, flagged);
+        api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
+            return runPostPhase(run, d.batches || {});
         }).catch(function (e) {
             failRun(run, e);
         }).then(function () { run.rechecking = false; });
+    }
+
+    /* ─────────────────────── Resume an interrupted run ─────────────────── */
+    // The run state lives server-side (recorded by the AJAX endpoints as the run progresses). If
+    // the driving tab disappeared after updates were installed but before the post screenshots
+    // were dispatched, the next page load offers to take them now (or discard the run).
+
+    function checkResume() {
+        var host = document.querySelector('.wcd-run-host');
+        if (!host || host.querySelector('.wcd-run')) { return; }
+        api('run_status', {}).then(function (d) {
+            if (!d || !d.active || !d.stale || !(d.missing_post || []).length) { return; }
+            renderResumeNotice(host, (d.missing_post || []).length);
+        }).catch(function () {});
+    }
+
+    function renderResumeNotice(host, missingCount) {
+        var body = fmt(1 === missingCount ? t('resumeBodySingle') : t('resumeBodyPlural'), { '%d': String(missingCount) });
+        var resume = el('button', { class: 'ui small green button', type: 'button' }, [
+            el('i', { class: 'camera icon' }),
+            document.createTextNode(t('resumePost'))
+        ]);
+        var discard = el('button', { class: 'ui small basic button', type: 'button', text: t('discard') });
+        var box = el('div', { class: 'ui warning message wcd-resume' }, [
+            el('div', { class: 'header', text: t('resumeTitle') }),
+            el('p', { text: body }),
+            el('p', {}, [resume, discard])
+        ]);
+        resume.addEventListener('click', function () { startResume(host, box, resume); });
+        discard.addEventListener('click', function () {
+            api('run_discard', {}).catch(function () {});
+            if (box.parentNode) { box.parentNode.removeChild(box); }
+        });
+        host.appendChild(box);
+    }
+
+    function startResume(host, box, button) {
+        button.disabled = true;
+        api('run_resume_post', {}).then(function (d) {
+            if (box.parentNode) { box.parentNode.removeChild(box); }
+            if (d.warning) { window.alert(d.warning); }
+            var sites = d.sites || [];
+            var batches = d.batches || {};
+            if (!sites.length) { return; }
+            activeRun = true;
+            var single = 1 === sites.length;
+            var total = sites.reduce(function (n, s) { return n + (Number(s.checks) || 0); }, 0);
+            var run = buildRun(host, sites, sites, single, total);
+            run.dismiss.addEventListener('click', function () { if (!run.dismiss.disabled) { closeRun(run); } });
+            // Pre + updates already happened in the interrupted run; show them as done.
+            setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
+            run.preBatches = values(d.pre_batches || {});
+            runPostPhase(run, batches).catch(function (e) { failRun(run, e); });
+        }).catch(function (e) {
+            button.disabled = false;
+            window.alert(e.message);
+        });
     }
 
     function failRun(run, e) {
@@ -871,9 +1004,10 @@
         });
     }
 
-    /* ─────────────────────── Change Detections overview ────────────────── */
-    // Only active on the runs page (#wcd-runs). Mirrors the webapp's filter bar + batch/list views;
-    // the server returns rendered HTML fragments which we swap in (drill-in loads per batch on open).
+    /* ──────────────────────── Visual Checks overview ────────────────────── */
+    // Only active on the Visual Checks page (#wcd-runs). Native Fomantic filter dropdowns (period /
+    // status / website / visual; type is fixed to On-Demand server-side) + batch/list views; the
+    // server returns rendered HTML fragments which we swap in (drill-in loads per batch on open).
 
     function initRuns() {
         var root = document.getElementById('wcd-runs');
@@ -890,152 +1024,151 @@
         function pad(n) { return n < 10 ? '0' + n : '' + n; }
         function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 
-        function selectedValues(sel) {
-            if (!sel) { return []; }
-            return Array.prototype.slice.call(sel.selectedOptions || []).map(function (o) { return o.value; });
+        // Fomantic dropdowns keep their value in the embedded hidden input (multi = comma-separated).
+        function hiddenValue(id) {
+            var input = root.querySelector('#' + id + ' input[type="hidden"]');
+            return input ? input.value : '';
         }
 
-        function closePopovers() {
-            root.querySelectorAll('.wcd-filter-pill-wrap.is-open').forEach(function (w) { w.classList.remove('is-open'); });
-        }
-
-        function pillValueEl(filter) {
-            return root.querySelector('.wcd-filter-pill-wrap[data-filter="' + filter + '"] .wcd-pill-value');
-        }
-
-        function setPillValue(filter, text) {
-            var node = pillValueEl(filter);
-            if (node) { node.textContent = text; }
-        }
-
-        function pillDefault(filter) {
-            var node = pillValueEl(filter);
-            return node ? (node.getAttribute('data-default') || '') : '';
-        }
-
-        function periodLabel(from, to) {
-            if (!from && !to) { return 'All time'; }
-            if (!from || !to) { return 'Custom range'; }
-            return from + ' to ' + to;
-        }
-
-        function refreshLabels() {
-            var statusCount = selectedValues(root.querySelector('#wcd-runs-status')).length;
-            var siteCount = selectedValues(root.querySelector('#wcd-runs-website')).length;
-            setPillValue('status', statusCount ? statusCount + ' selected' : pillDefault('status'));
-            setPillValue('website', siteCount ? siteCount + ' selected' : pillDefault('website'));
-            var src = root.querySelector('#wcd-runs-source');
-            if (src) { setPillValue('source', src.options[src.selectedIndex].text); }
-            var vis = root.querySelector('#wcd-runs-visual');
-            if (vis) { setPillValue('visual', vis.options[vis.selectedIndex].text); }
-        }
-
-        function gather() {
+        // Snapshot of the filter controls, taken when the user clicks Filter (MainWP's native
+        // explicit-apply pattern). Pagination/view changes reuse the snapshot, so unapplied
+        // control changes never leak into a request.
+        function gatherFilters() {
+            var sites = hiddenValue('wcd-runs-website');
             return {
-                view: state.view,
-                page: state.page,
                 from: state.from,
                 to: state.to,
-                status: selectedValues(root.querySelector('#wcd-runs-status')).join(','),
-                source: (root.querySelector('#wcd-runs-source') || {}).value || '',
-                difference_only: (root.querySelector('#wcd-runs-visual') || {}).value === '1' ? 1 : 0,
-                site_ids: selectedValues(root.querySelector('#wcd-runs-website'))
+                status: hiddenValue('wcd-runs-status'),
+                difference_only: hiddenValue('wcd-runs-visual') === '1' ? 1 : 0,
+                site_ids: sites ? sites.split(',') : []
             };
         }
 
+        var applied = gatherFilters();
+        var loadSeq = 0;
+
         function load() {
+            // A newer request supersedes an in-flight one (out-of-order responses are discarded).
+            var seq = ++loadSeq;
+            var request = {
+                view: state.view,
+                page: state.page,
+                from: applied.from,
+                to: applied.to,
+                status: applied.status,
+                difference_only: applied.difference_only,
+                site_ids: applied.site_ids
+            };
             listEl.innerHTML = '';
             listEl.appendChild(el('div', { class: 'wcd-runs-loading' }, [el('div', { class: 'ui active inline loader' })]));
             pagerEl.innerHTML = '';
-            api('runs_render', gather()).then(function (d) {
+            api('runs_render', request).then(function (d) {
+                if (seq !== loadSeq) { return; }
                 listEl.innerHTML = d.html || '';
                 pagerEl.innerHTML = d.pagination || '';
             }).catch(function (e) {
+                if (seq !== loadSeq) { return; }
                 listEl.innerHTML = '';
                 listEl.appendChild(el('p', { class: 'wcd-error', text: e.message }));
             });
         }
 
-        function applyPreset(days) {
-            if ('all' === days) {
+        function applyFilters() {
+            applied = gatherFilters();
+            state.page = 1;
+            load();
+        }
+
+        function applyPeriod(value) {
+            var range = root.querySelector('.wcd-runs-daterange');
+            if ('custom' === value) {
+                if (range) { range.hidden = false; }
+                readDates();
+                return;
+            }
+            if (range) { range.hidden = true; }
+            if ('all' === value) {
                 state.from = '';
                 state.to = '';
             } else {
-                var n = parseInt(days, 10) || 30;
+                var n = parseInt(value, 10) || 30;
                 var to = new Date();
                 var from = new Date();
                 from.setDate(from.getDate() - n);
-                state.to = iso(to);
                 state.from = iso(from);
+                state.to = iso(to);
             }
             var f = root.querySelector('#wcd-runs-from'), t = root.querySelector('#wcd-runs-to');
             if (f) { f.value = state.from; }
             if (t) { t.value = state.to; }
-            setPillValue('period', periodLabel(state.from, state.to));
+        }
+
+        function readDates() {
+            var f = root.querySelector('#wcd-runs-from'), t = root.querySelector('#wcd-runs-to');
+            state.from = f ? f.value : '';
+            state.to = t ? t.value : '';
+        }
+
+        // Init the native Fomantic dropdowns. Fomantic JS always ships on MainWP admin pages; the
+        // guard only protects against an unexpected absence (the page then simply shows defaults).
+        // The period dropdown needs an onChange to maintain the from/to dates and the custom-range
+        // visibility; the other dropdowns only apply once the Filter button is clicked.
+        var $ = (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') ? window.jQuery : null;
+        if ($) {
+            $('#wcd-runs-period', root).dropdown({ onChange: function (value) { applyPeriod(String(value)); } });
+            $('#wcd-runs-visual, #wcd-runs-status, #wcd-runs-website', root).dropdown();
         }
 
         function toggleBatch(batchEl) {
             if (!batchEl) { return; }
-            var body = batchEl.querySelector('.wcd-runs-batch-body');
-            var open = !body.hidden;
-            body.hidden = open;
+            var bodyRow = batchEl.querySelector('.wcd-runs-batch-body');
+            var cell = bodyRow ? bodyRow.querySelector('td') : null;
+            if (!bodyRow || !cell) { return; }
+            var open = !bodyRow.hidden;
+            bodyRow.hidden = open;
             batchEl.classList.toggle('is-open', !open);
+            var caret = batchEl.querySelector('.accordion-trigger i.icon');
+            if (caret) { caret.className = 'caret ' + (open ? 'right' : 'down') + ' icon'; }
             if (!open && !batchEl.getAttribute('data-loaded')) {
                 batchEl.setAttribute('data-loaded', '1');
+                cell.innerHTML = '';
+                cell.appendChild(el('div', { class: 'wcd-runs-loading' }, [el('div', { class: 'ui active inline loader' })]));
                 api('runs_comparisons', { batch: batchEl.getAttribute('data-batch-id') }).then(function (d) {
-                    body.innerHTML = d.html || '';
+                    cell.innerHTML = d.html || '';
                 }).catch(function (e) {
-                    body.innerHTML = '';
-                    body.appendChild(el('p', { class: 'wcd-error', text: e.message }));
+                    // Allow a retry on the next open.
+                    batchEl.removeAttribute('data-loaded');
+                    cell.innerHTML = '';
+                    cell.appendChild(el('p', { class: 'wcd-error', text: e.message }));
                 });
             }
         }
 
         function resetFilters() {
-            state.view = 'batch';
-            state.page = 1;
             state.from = root.getAttribute('data-from') || '';
             state.to = root.getAttribute('data-to') || '';
-            ['#wcd-runs-status', '#wcd-runs-website'].forEach(function (sel) {
-                var s = root.querySelector(sel);
-                if (s) { Array.prototype.slice.call(s.options).forEach(function (o) { o.selected = false; }); }
+            var f = root.querySelector('#wcd-runs-from'), t = root.querySelector('#wcd-runs-to');
+            if (f) { f.value = state.from; }
+            if (t) { t.value = state.to; }
+            var range = root.querySelector('.wcd-runs-daterange');
+            if (range) { range.hidden = true; }
+            // Reset the dropdown values at the source of truth (the hidden inputs) so gatherFilters()
+            // is correct even without Fomantic, then let Fomantic redraw its UI state. The period
+            // onChange only updates the date state (no request), so this stays a single load.
+            [['wcd-runs-period', '30'], ['wcd-runs-visual', '0'], ['wcd-runs-status', ''], ['wcd-runs-website', '']].forEach(function (pair) {
+                var input = root.querySelector('#' + pair[0] + ' input[type="hidden"]');
+                if (input) { input.value = pair[1]; }
             });
-            var src = root.querySelector('#wcd-runs-source'); if (src) { src.value = ''; }
-            var vis = root.querySelector('#wcd-runs-visual'); if (vis) { vis.value = '0'; }
-            var f = root.querySelector('#wcd-runs-from'); if (f) { f.value = state.from; }
-            var t = root.querySelector('#wcd-runs-to'); if (t) { t.value = state.to; }
-            root.querySelectorAll('.wcd-runs-view-btn').forEach(function (b) { b.classList.toggle('active', 'batch' === b.getAttribute('data-view')); });
-            setPillValue('period', periodLabel(state.from, state.to));
-            refreshLabels();
-            closePopovers();
-            load();
+            if ($) {
+                $('#wcd-runs-period', root).dropdown('set selected', '30');
+                $('#wcd-runs-visual', root).dropdown('set selected', '0');
+                $('#wcd-runs-status, #wcd-runs-website', root).dropdown('clear');
+            }
+            applyFilters();
         }
 
         root.addEventListener('click', function (e) {
-            var pill = e.target.closest('.wcd-filter-pill');
-            if (pill) {
-                var wrap = pill.closest('.wcd-filter-pill-wrap');
-                var wasOpen = wrap.classList.contains('is-open');
-                closePopovers();
-                if (!wasOpen) { wrap.classList.add('is-open'); }
-                e.stopPropagation();
-                return;
-            }
-            if (e.target.closest('.wcd-filter-popover')) {
-                var preset = e.target.closest('.wcd-date-preset');
-                if (preset) { applyPreset(preset.getAttribute('data-days')); }
-                if (e.target.closest('.wcd-runs-apply-period')) {
-                    var f = root.querySelector('#wcd-runs-from'), t = root.querySelector('#wcd-runs-to');
-                    state.from = f ? f.value : '';
-                    state.to = t ? t.value : '';
-                    setPillValue('period', periodLabel(state.from, state.to));
-                    closePopovers();
-                    state.page = 1;
-                    load();
-                }
-                e.stopPropagation();
-                return;
-            }
+            if (e.target.closest('.wcd-runs-apply')) { applyFilters(); return; }
             if (e.target.closest('.wcd-runs-reset')) { resetFilters(); return; }
             var viewBtn = e.target.closest('.wcd-runs-view-btn');
             if (viewBtn) {
@@ -1056,15 +1189,7 @@
         });
 
         root.addEventListener('change', function (e) {
-            if (e.target.matches('#wcd-runs-status, #wcd-runs-website, #wcd-runs-source, #wcd-runs-visual')) {
-                refreshLabels();
-                state.page = 1;
-                load();
-            }
-        });
-
-        document.addEventListener('click', function (e) {
-            if (!e.target.closest('.wcd-filter-pill-wrap')) { closePopovers(); }
+            if (e.target.matches('#wcd-runs-from, #wcd-runs-to')) { readDates(); }
         });
 
         load();
@@ -1073,6 +1198,7 @@
     function onReady() {
         loadBannerStats();
         initRuns();
+        checkResume();
     }
 
     if (document.readyState === 'loading') {

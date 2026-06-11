@@ -1,12 +1,14 @@
 <?php
 /**
- * "Change Detections" overview page (Sites submenu; slug WcdChangeDetections, MainWP page hook
- * ManageSitesWcdChangeDetections).
+ * "Visual Checks" overview page (slug WcdVisualChecks, MainWP page hook ManageSitesWcdVisualChecks).
  *
- * A dashboard-wide list of runs (batches) across the account, modeled on the webapp's Change
- * Detections view: filter bar (period / status / type / website / visual), batch + list views,
- * pagination, and an inline comparison table per run. Data comes from the WCD API
- * (/batches + /comparisons); the markup/AJAX live here, the styles in assets/css/wcd-runs.css.
+ * Registered as a MainWP Sites subpage (hidden from the Sites menu) and linked from the left
+ * menu's Monitoring category group (see WCD_MainWP_Bootstrap::register_left_menu_item()). A
+ * dashboard-wide list of On-Demand Check runs (batches): filter bar (period / status / website /
+ * visual), batch + list views, pagination, and an inline comparison table per run. The source is
+ * always `manual` (On-Demand): runs created elsewhere on the account (monitoring, auto-update via
+ * the webapp) are out of scope here. Data comes from the WCD API (/batches + /comparisons); the
+ * markup/AJAX live here, the styles in assets/css/wcd-runs.css.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -14,11 +16,11 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders the account-wide "Change Detections" overview page and its filter/run helpers.
+ * Renders the account-wide "Visual Checks" overview page and its filter/run helpers.
  */
 class WCD_MainWP_Runs_View {
 
-	const PAGE_SLUG = 'WcdChangeDetections';
+	const PAGE_SLUG = 'WcdVisualChecks';
 	const PER_PAGE  = 20;
 
 	/**
@@ -28,20 +30,69 @@ class WCD_MainWP_Runs_View {
 	 */
 	public static function init(): void {
 		add_filter( 'mainwp_getsubpages_sites', array( self::class, 'register_page' ) );
+		// menu_hidden only hides the Sites LEFT-menu entry; the Sites page-navigation tabs ignore
+		// it, so we filter our tab out of every Sites page except our own (same pattern as
+		// MainWP's own Password Policy page).
+		add_filter( 'mainwp_manage_sites_navigation_items', array( self::class, 'filter_navigation_items' ), 10, 3 );
 	}
 
 	/**
-	 * Register the page as a Sites submenu entry (not a per-site tab, so it shows in the left menu).
+	 * Keep our entries out of the Sites page navigation. The navigation column is only VISIBLE on
+	 * per-site views in MainWP 6 (display:none elsewhere), and there our account-wide pages would
+	 * just confuse; on our own pages the filter is a practical no-op (column hidden). The visible
+	 * Visual Checks | Settings switcher is render_tabs(), not this navigation.
+	 *
+	 * @param mixed  $items      Navigation items (title, href, active).
+	 * @param int    $site_id    Current site id (0 on overview pages).
+	 * @param string $shown_page Current subpage slug.
+	 * @return array Filtered navigation items.
+	 */
+	public static function filter_navigation_items( $items, $site_id = 0, $shown_page = '' ): array {
+		if ( ! is_array( $items ) ) {
+			return array();
+		}
+
+		$our_slugs = array( self::PAGE_SLUG, WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
+		$on_ours   = in_array( (string) $shown_page, $our_slugs, true );
+
+		$is_ours = static function ( $item ) use ( $our_slugs ) {
+			$href = is_array( $item ) ? (string) ( $item['href'] ?? '' ) : '';
+			foreach ( $our_slugs as $slug ) {
+				// Exact page match: the Settings slug shares the Visual Checks slug as prefix.
+				if ( preg_match( '/page=ManageSites' . preg_quote( $slug, '/' ) . '($|&)/', $href ) ) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		return array_values(
+			array_filter(
+				$items,
+				static function ( $item ) use ( $is_ours, $on_ours ) {
+					return $on_ours ? $is_ours( $item ) : ! $is_ours( $item );
+				}
+			)
+		);
+	}
+
+	/**
+	 * Register the page as a Sites subpage. menu_hidden keeps it out of the Sites menu group; its
+	 * left-menu entry lives in the Monitoring category instead (registered by the bootstrap).
 	 *
 	 * @param array $sub_pages Existing MainWP Sites subpages.
-	 * @return array Subpages with the Change Detections entry appended.
+	 * @return array Subpages with the Visual Checks entry appended.
 	 */
 	public static function register_page( array $sub_pages ): array {
 		$sub_pages[] = array(
-			'title'    => 'Change Detections',
-			'slug'     => self::PAGE_SLUG,
-			'sitetab'  => false,
-			'callback' => array( self::class, 'render_page' ),
+			'title'       => __( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+			'slug'        => self::PAGE_SLUG,
+			'sitetab'     => false,
+			'menu_hidden' => true,
+			// Explicit href so the Sites page navigation never appends a per-site &id=N.
+			'href'        => 'admin.php?page=ManageSites' . self::PAGE_SLUG,
+			'callback'    => array( self::class, 'render_page' ),
 		);
 
 		return $sub_pages;
@@ -56,6 +107,35 @@ class WCD_MainWP_Runs_View {
 		include WCD_MAINWP_PLUGIN_PATH . 'templates/runs-view.php';
 	}
 
+	/**
+	 * Echo the Visual Checks area's tab switcher: a native Fomantic "top attached tabular menu"
+	 * (the same element MainWP's own modules use for in-page tabs; the Sites page-navigation
+	 * column is display:none on non-per-site pages in MainWP 6, so it cannot serve as the
+	 * switcher here). The content below should use an "attached segment" to dock onto the tabs.
+	 *
+	 * @param string $active Active tab: 'checks' or 'settings'.
+	 * @return void
+	 */
+	public static function render_tabs( string $active ): void {
+		$tabs = array(
+			'checks'   => array(
+				'href'  => admin_url( 'admin.php?page=ManageSites' . self::PAGE_SLUG ),
+				'label' => __( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+			),
+			'settings' => array(
+				'href'  => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG ),
+				'label' => __( 'Settings', 'webchangedetector-for-mainwp' ),
+			),
+		);
+		?>
+		<div class="ui top attached tabular menu wcd-vc-tabs">
+			<?php foreach ( $tabs as $key => $tab ) : ?>
+				<a class="item<?php echo $key === $active ? ' active' : ''; ?>" href="<?php echo esc_url( $tab['href'] ); ?>"><?php echo esc_html( $tab['label'] ); ?></a>
+			<?php endforeach; ?>
+		</div>
+		<?php
+	}
+
 	/* ─────────────────────────── Filter options ────────────────────────── */
 
 	/**
@@ -65,24 +145,10 @@ class WCD_MainWP_Runs_View {
 	 */
 	public static function status_options(): array {
 		return array(
-			'new'            => __( 'New', 'webchangedetector' ),
-			'ok'             => __( 'OK', 'webchangedetector' ),
-			'to_fix'         => __( 'To Fix', 'webchangedetector' ),
-			'false_positive' => __( 'False positive', 'webchangedetector' ),
-		);
-	}
-
-	/**
-	 * Source (check type) filter options keyed by API source value.
-	 *
-	 * @return array Source value => translated label.
-	 */
-	public static function source_options(): array {
-		return array(
-			''            => __( 'All types', 'webchangedetector' ),
-			'manual'      => __( 'On-Demand Checks', 'webchangedetector' ),
-			'monitoring'  => __( 'Monitoring', 'webchangedetector' ),
-			'auto_update' => __( 'Auto-Update Checks', 'webchangedetector' ),
+			'new'            => __( 'New', 'webchangedetector-for-mainwp' ),
+			'ok'             => __( 'OK', 'webchangedetector-for-mainwp' ),
+			'to_fix'         => __( 'To Fix', 'webchangedetector-for-mainwp' ),
+			'false_positive' => __( 'False positive', 'webchangedetector-for-mainwp' ),
 		);
 	}
 
@@ -113,9 +179,11 @@ class WCD_MainWP_Runs_View {
 
 	/**
 	 * Map raw request input to the API filter array used for /batches and /comparisons. Mirrors the
-	 * webapp's mapping (difference_only -> above_threshold, selected sites -> group_ids).
+	 * webapp's mapping (difference_only -> above_threshold, selected sites -> group_ids). The source
+	 * is always `manual`: this view only shows On-Demand Checks, never the account's monitoring or
+	 * auto-update runs made elsewhere (e.g. in the webapp).
 	 *
-	 * @param array $input Raw request input (page, from, to, source, status, difference_only, site_ids).
+	 * @param array $input Raw request input (page, from, to, status, difference_only, site_ids).
 	 * @return array API filter array for /batches and /comparisons.
 	 */
 	public static function build_api_filters( array $input ): array {
@@ -124,20 +192,16 @@ class WCD_MainWP_Runs_View {
 		$filters = array(
 			'page'     => max( 1, (int) ( $input['page'] ?? 1 ) ),
 			'per_page' => self::PER_PAGE,
+			'source'   => 'manual',
 		);
 
-		$from = isset( $input['from'] ) ? trim( (string) $input['from'] ) : '';
-		$to   = isset( $input['to'] ) ? trim( (string) $input['to'] ) : '';
-		if ( '' !== $from ) {
-			$filters['from'] = gmdate( 'Y-m-d', strtotime( $from ) );
+		$from_ts = strtotime( isset( $input['from'] ) ? trim( (string) $input['from'] ) : '' );
+		$to_ts   = strtotime( isset( $input['to'] ) ? trim( (string) $input['to'] ) : '' );
+		if ( false !== $from_ts ) {
+			$filters['from'] = gmdate( 'Y-m-d', $from_ts );
 		}
-		if ( '' !== $to ) {
-			$filters['to'] = gmdate( 'Y-m-d', strtotime( $to ) );
-		}
-
-		$source = isset( $input['source'] ) ? (string) $input['source'] : '';
-		if ( '' !== $source ) {
-			$filters['source'] = $source;
+		if ( false !== $to_ts ) {
+			$filters['to'] = gmdate( 'Y-m-d', $to_ts );
 		}
 
 		$status            = isset( $input['status'] ) ? (string) $input['status'] : '';
@@ -184,7 +248,8 @@ class WCD_MainWP_Runs_View {
 	/* ─────────────────────────────── Rendering ─────────────────────────── */
 
 	/**
-	 * Render the batch (accordion) list for the given API filters.
+	 * Render the batch (accordion) list for the given API filters as a native MainWP table: one
+	 * tbody per run with a clickable title row and a lazy-loaded content row (the comparisons).
 	 *
 	 * @param array $api_filters API filter array from build_api_filters().
 	 * @return array Array with 'html' (string) markup and 'pagination' (string) markup.
@@ -210,9 +275,24 @@ class WCD_MainWP_Runs_View {
 		}
 
 		ob_start();
-		foreach ( $batches as $batch ) {
-			self::render_batch_card( (array) $batch );
-		}
+		?>
+		<table class="ui tablet stackable table mainwp-manage-updates-table wcd-runs-table">
+			<thead>
+				<tr>
+					<th scope="col" class="collapsing no-sort"></th>
+					<th scope="col"><?php esc_html_e( 'Websites', 'webchangedetector-for-mainwp' ); ?></th>
+					<th scope="col"><?php esc_html_e( 'Status', 'webchangedetector-for-mainwp' ); ?></th>
+					<th scope="col" class="collapsing"><?php esc_html_e( 'Created', 'webchangedetector-for-mainwp' ); ?></th>
+					<th scope="col"><?php esc_html_e( 'AI Summary', 'webchangedetector-for-mainwp' ); ?></th>
+				</tr>
+			</thead>
+			<?php
+			foreach ( $batches as $batch ) {
+				self::render_batch_rows( (array) $batch );
+			}
+			?>
+		</table>
+		<?php
 
 		return array(
 			'html'       => ob_get_clean(),
@@ -230,7 +310,12 @@ class WCD_MainWP_Runs_View {
 		// Newest comparisons first (matches the webapp's flat List view).
 		$api_filters['orderBy']        = 'created_at';
 		$api_filters['orderDirection'] = 'desc';
-		$response                      = WCD_MainWP_API::get_comparisons( $api_filters );
+		// The /comparisons endpoint filters groups via `groups` (not /batches' `group_ids`).
+		if ( isset( $api_filters['group_ids'] ) ) {
+			$api_filters['groups'] = $api_filters['group_ids'];
+			unset( $api_filters['group_ids'] );
+		}
+		$response = WCD_MainWP_API::get_comparisons( $api_filters );
 		if ( ! $response['ok'] ) {
 			return array(
 				'html'       => self::message_box( 'wcd-error', $response['error'] ),
@@ -264,23 +349,26 @@ class WCD_MainWP_Runs_View {
 	 */
 	public static function render_comparisons_table( array $comparisons, bool $with_run = false ): string {
 		if ( empty( $comparisons ) ) {
-			return '<p class="wcd-muted">' . esc_html__( 'No comparisons in this run.', 'webchangedetector' ) . '</p>';
+			return '<p class="wcd-muted">' . esc_html__( 'No comparisons in this run.', 'webchangedetector-for-mainwp' ) . '</p>';
 		}
+
+		// Flat list = a primary MainWP table; batch drill-in = MainWP's nested item-table style.
+		$table_class = $with_run ? 'ui tablet stackable table wcd-runs-table' : 'ui table mainwp-manage-updates-item-table';
 
 		ob_start();
 		?>
-		<table class="ui celled striped compact table">
+		<table class="<?php echo esc_attr( $table_class ); ?>">
 			<thead>
 				<tr>
-					<th><?php esc_html_e( 'Status', 'webchangedetector' ); ?></th>
+					<th><?php esc_html_e( 'Status', 'webchangedetector-for-mainwp' ); ?></th>
 					<?php
 					if ( $with_run ) :
 						?>
-						<th><?php esc_html_e( 'Run', 'webchangedetector' ); ?></th><?php endif; ?>
-					<th><?php esc_html_e( 'URL', 'webchangedetector' ); ?></th>
-					<th><?php esc_html_e( 'Compared', 'webchangedetector' ); ?></th>
-					<th><?php esc_html_e( 'Visual change', 'webchangedetector' ); ?></th>
-					<th><?php esc_html_e( 'AI summary', 'webchangedetector' ); ?></th>
+						<th><?php esc_html_e( 'Run', 'webchangedetector-for-mainwp' ); ?></th><?php endif; ?>
+					<th><?php esc_html_e( 'URL', 'webchangedetector-for-mainwp' ); ?></th>
+					<th><?php esc_html_e( 'Compared', 'webchangedetector-for-mainwp' ); ?></th>
+					<th><?php esc_html_e( 'Visual change', 'webchangedetector-for-mainwp' ); ?></th>
+					<th><?php esc_html_e( 'AI summary', 'webchangedetector-for-mainwp' ); ?></th>
 					<th></th>
 				</tr>
 			</thead>
@@ -299,25 +387,27 @@ class WCD_MainWP_Runs_View {
 	/* ──────────────────────── Rendering internals ──────────────────────── */
 
 	/**
-	 * Echo one batch accordion card.
+	 * Echo one batch as a native accordion-table tbody: a clickable title row and a hidden content
+	 * row whose comparisons are lazy-loaded on first open. No "On-Demand Check" label per row: this
+	 * page only ever shows On-Demand Checks, so the websites identify the run.
 	 *
 	 * @param array $batch Batch record from the API.
 	 * @return void
 	 */
-	protected static function render_batch_card( array $batch ): void {
-		$batch_id     = (string) ( $batch['id'] ?? '' );
-		$failed       = (int) ( $batch['queues_count']['failed'] ?? 0 );
-		$counts       = ( isset( $batch['comparisons_count'] ) && is_array( $batch['comparisons_count'] ) ) ? $batch['comparisons_count'] : array();
-		$display_name = self::display_batch_name( $batch['name'] ?? '' );
-		$source_label = self::source_label( $batch['source'] ?? '' );
-		$group_names  = ( ! empty( $batch['group_names'] ) && is_array( $batch['group_names'] ) ) ? $batch['group_names'] : array();
-		$finished_at  = $batch['finished_at'] ?? '';
-		$ai_summary   = $batch['ai_summary']['summary'] ?? '';
+	protected static function render_batch_rows( array $batch ): void {
+		$batch_id    = (string) ( $batch['id'] ?? '' );
+		$failed      = (int) ( $batch['queues_count']['failed'] ?? 0 );
+		$counts      = ( isset( $batch['comparisons_count'] ) && is_array( $batch['comparisons_count'] ) ) ? $batch['comparisons_count'] : array();
+		$group_names = ( ! empty( $batch['group_names'] ) && is_array( $batch['group_names'] ) ) ? $batch['group_names'] : array();
+		$finished_at = (string) ( $batch['finished_at'] ?? '' );
+		$ai_summary  = (string) ( $batch['ai_summary']['summary'] ?? '' );
+		$label       = ! empty( $group_names ) ? implode( ', ', $group_names ) : self::display_batch_name( $batch['name'] ?? '' );
 		?>
-		<div class="ui segment wcd-runs-batch" data-batch-id="<?php echo esc_attr( $batch_id ); ?>">
-			<div class="wcd-runs-batch-head">
-				<span class="wcd-runs-caret dashicons dashicons-arrow-right-alt2"></span>
-				<div class="wcd-runs-col wcd-runs-col-status">
+		<tbody class="wcd-runs-batch" data-batch-id="<?php echo esc_attr( $batch_id ); ?>">
+			<tr class="title wcd-runs-batch-head">
+				<td class="accordion-trigger collapsing"><i class="caret right icon"></i></td>
+				<td><strong><?php echo esc_html( $label ); ?></strong></td>
+				<td>
 					<div class="wcd-status-badges">
 						<?php
 						foreach ( $counts as $status => $amount ) {
@@ -330,42 +420,28 @@ class WCD_MainWP_Runs_View {
 						}
 						?>
 					</div>
-				</div>
-				<div class="wcd-runs-col wcd-runs-col-name">
-					<strong><?php esc_html_e( 'Change Detection', 'webchangedetector' ); ?></strong>
-					<span class="wcd-cd-name"><?php echo esc_html( $display_name ); ?></span>
-					<?php if ( $source_label && $source_label !== $display_name ) : ?>
-						<span class="wcd-cd-subtitle"><?php echo esc_html( $source_label ); ?></span>
-					<?php endif; ?>
-					<?php if ( ! empty( $group_names ) ) : ?>
-						<span class="wcd-cd-websites"><?php echo esc_html( implode( ', ', $group_names ) ); ?></span>
-					<?php endif; ?>
-				</div>
-				<div class="wcd-runs-col wcd-runs-col-date">
-					<strong><?php esc_html_e( 'Created', 'webchangedetector' ); ?></strong>
-					<span>
-						<?php
-						if ( $finished_at ) {
-							echo esc_html( self::time_ago( $finished_at ) );
-							echo '<br>';
-							echo esc_html( date_i18n( 'd/m/Y H:i', strtotime( $finished_at ) ) );
-						} else {
-							esc_html_e( 'Processing', 'webchangedetector' );
-						}
-						?>
-					</span>
-				</div>
-				<div class="wcd-runs-col wcd-runs-col-summary">
-					<strong><?php esc_html_e( 'AI Summary', 'webchangedetector' ); ?></strong>
+				</td>
+				<td class="collapsing">
 					<?php if ( $finished_at ) : ?>
-						<span class="wcd-ai-summary-text"><?php echo esc_html( $ai_summary ? $ai_summary : __( 'AI summary skipped', 'webchangedetector' ) ); ?></span>
+						<span data-tooltip="<?php echo esc_attr( self::short_date( $finished_at ) ); ?>" data-inverted="" data-position="left center">
+							<?php echo esc_html( self::time_ago( $finished_at ) ); ?>
+						</span>
+					<?php else : ?>
+						<span class="ui small text"><?php esc_html_e( 'Processing', 'webchangedetector-for-mainwp' ); ?></span>
 					<?php endif; ?>
-				</div>
-			</div>
-			<div class="wcd-runs-batch-body" hidden>
-				<div class="wcd-runs-loading"><div class="ui active inline loader"></div></div>
-			</div>
-		</div>
+				</td>
+				<td>
+					<?php if ( $finished_at ) : ?>
+						<span class="ui small text wcd-ai-summary-text"><?php echo esc_html( $ai_summary ? $ai_summary : __( 'AI summary skipped', 'webchangedetector-for-mainwp' ) ); ?></span>
+					<?php endif; ?>
+				</td>
+			</tr>
+			<tr class="wcd-runs-batch-body" hidden>
+				<td colspan="5">
+					<div class="wcd-runs-loading"><div class="ui active inline loader"></div></div>
+				</td>
+			</tr>
+		</tbody>
 		<?php
 	}
 
@@ -410,8 +486,8 @@ class WCD_MainWP_Runs_View {
 			</td>
 			<td>
 				<?php if ( $before || $after ) : ?>
-					<div class="wcd-compared-row"><span class="wcd-ba-label"><?php esc_html_e( 'Before', 'webchangedetector' ); ?></span><span class="screenshot-date"><?php echo esc_html( self::short_date( $before ) ); ?></span></div>
-					<div class="wcd-compared-row"><span class="wcd-ba-label"><?php esc_html_e( 'After', 'webchangedetector' ); ?></span><span class="screenshot-date"><?php echo esc_html( self::short_date( $after ) ); ?></span></div>
+					<div class="wcd-compared-row"><span class="wcd-ba-label"><?php esc_html_e( 'Before', 'webchangedetector-for-mainwp' ); ?></span><span class="screenshot-date"><?php echo esc_html( self::short_date( $before ) ); ?></span></div>
+					<div class="wcd-compared-row"><span class="wcd-ba-label"><?php esc_html_e( 'After', 'webchangedetector-for-mainwp' ); ?></span><span class="screenshot-date"><?php echo esc_html( self::short_date( $after ) ); ?></span></div>
 				<?php endif; ?>
 			</td>
 			<td class="wcd-visual-changes-column">
@@ -422,7 +498,7 @@ class WCD_MainWP_Runs_View {
 			<?php
 			if ( $public ) :
 				?>
-				<a class="ui mini button" href="<?php echo esc_url( $public ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'View', 'webchangedetector' ); ?></a><?php endif; ?></td>
+				<a class="ui mini button" href="<?php echo esc_url( $public ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'View', 'webchangedetector-for-mainwp' ); ?></a><?php endif; ?></td>
 		</tr>
 		<?php
 	}
@@ -437,12 +513,12 @@ class WCD_MainWP_Runs_View {
 	 */
 	protected static function status_badge( string $status, $count = null ): void {
 		$meta  = array(
-			'new'            => array( 'red', __( 'New', 'webchangedetector' ) ),
-			'ok'             => array( 'green', __( 'OK', 'webchangedetector' ) ),
-			'to_fix'         => array( 'orange', __( 'To Fix', 'webchangedetector' ) ),
-			'false_positive' => array( 'purple', __( 'False positive', 'webchangedetector' ) ),
-			'failed'         => array( 'grey', __( 'Failed', 'webchangedetector' ) ),
-			'none'           => array( 'basic', __( 'No changes', 'webchangedetector' ) ),
+			'new'            => array( 'red', __( 'New', 'webchangedetector-for-mainwp' ) ),
+			'ok'             => array( 'green', __( 'OK', 'webchangedetector-for-mainwp' ) ),
+			'to_fix'         => array( 'orange', __( 'To Fix', 'webchangedetector-for-mainwp' ) ),
+			'false_positive' => array( 'purple', __( 'False positive', 'webchangedetector-for-mainwp' ) ),
+			'failed'         => array( 'grey', __( 'Failed', 'webchangedetector-for-mainwp' ) ),
+			'none'           => array( 'basic', __( 'No changes', 'webchangedetector-for-mainwp' ) ),
 		);
 		$color = $meta[ $status ][0] ?? 'basic';
 		$label = $meta[ $status ][1] ?? ucfirst( $status );
@@ -476,18 +552,18 @@ class WCD_MainWP_Runs_View {
 		ob_start();
 		?>
 		<div class="wcd-runs-pagination">
-			<button type="button" class="ui button wcd-runs-page" data-page="<?php echo esc_attr( (string) max( 1, $current - 1 ) ); ?>" <?php disabled( $current <= 1 ); ?>><?php esc_html_e( 'Previous', 'webchangedetector' ); ?></button>
-			<span class="wcd-runs-page-info">
+			<button type="button" class="ui mini basic button wcd-runs-page" data-page="<?php echo esc_attr( (string) max( 1, $current - 1 ) ); ?>" <?php disabled( $current <= 1 ); ?>><?php esc_html_e( 'Previous', 'webchangedetector-for-mainwp' ); ?></button>
+			<span class="wcd-runs-page-info ui small text">
 				<?php
 				printf(
 					/* translators: 1: current page, 2: total pages. */
-					esc_html__( 'Page %1$d of %2$d', 'webchangedetector' ),
+					esc_html__( 'Page %1$d of %2$d', 'webchangedetector-for-mainwp' ),
 					(int) $current,
 					(int) $last
 				);
 				?>
 			</span>
-			<button type="button" class="ui button wcd-runs-page" data-page="<?php echo esc_attr( (string) min( $last, $current + 1 ) ); ?>" <?php disabled( $current >= $last ); ?>><?php esc_html_e( 'Next', 'webchangedetector' ); ?></button>
+			<button type="button" class="ui mini basic button wcd-runs-page" data-page="<?php echo esc_attr( (string) min( $last, $current + 1 ) ); ?>" <?php disabled( $current >= $last ); ?>><?php esc_html_e( 'Next', 'webchangedetector-for-mainwp' ); ?></button>
 		</div>
 		<?php
 		return ob_get_clean();
@@ -499,7 +575,7 @@ class WCD_MainWP_Runs_View {
 	 * @return string Message markup.
 	 */
 	protected static function empty_box(): string {
-		return self::message_box( 'info', __( 'No change detections yet. Run an On-Demand Check or monitoring, or try different filters.', 'webchangedetector' ) );
+		return self::message_box( 'info', __( 'No change detections yet. Run an On-Demand Check or monitoring, or try different filters.', 'webchangedetector-for-mainwp' ) );
 	}
 
 	/**
@@ -518,22 +594,6 @@ class WCD_MainWP_Runs_View {
 	/* ───────────────────────────── Helpers ─────────────────────────────── */
 
 	/**
-	 * Human-readable label for a batch source value.
-	 *
-	 * @param string $source Source key (manual, monitoring, auto_update).
-	 * @return string Translated label, or empty string when unknown.
-	 */
-	protected static function source_label( string $source ): string {
-		$map = array(
-			'manual'      => __( 'On-Demand Checks', 'webchangedetector' ),
-			'monitoring'  => __( 'Monitoring', 'webchangedetector' ),
-			'auto_update' => __( 'Auto-Update Checks', 'webchangedetector' ),
-		);
-
-		return $map[ $source ] ?? '';
-	}
-
-	/**
 	 * Display name for a batch, rewriting the legacy "Manual Checks" label.
 	 *
 	 * @param mixed $name Raw batch name.
@@ -542,7 +602,7 @@ class WCD_MainWP_Runs_View {
 	protected static function display_batch_name( $name ): string {
 		$name = (string) $name;
 
-		return 'Manual Checks' === trim( $name ) ? __( 'On-Demand Checks', 'webchangedetector' ) : $name;
+		return 'Manual Checks' === trim( $name ) ? __( 'On-Demand Checks', 'webchangedetector-for-mainwp' ) : $name;
 	}
 
 	/**
@@ -554,10 +614,10 @@ class WCD_MainWP_Runs_View {
 	 */
 	public static function period_label( string $from, string $to ): string {
 		if ( '' === $from && '' === $to ) {
-			return __( 'All time', 'webchangedetector' );
+			return __( 'All time', 'webchangedetector-for-mainwp' );
 		}
 		if ( '' === $from || '' === $to ) {
-			return __( 'Custom range', 'webchangedetector' );
+			return __( 'Custom range', 'webchangedetector-for-mainwp' );
 		}
 
 		if ( gmdate( 'Y-m-d' ) === $to ) {
@@ -565,7 +625,7 @@ class WCD_MainWP_Runs_View {
 			foreach ( array( 7, 30, 90 ) as $preset ) {
 				if ( abs( $diff_days - $preset ) <= 1 ) {
 					/* translators: %d: number of days. */
-					return sprintf( __( 'Last %d days', 'webchangedetector' ), $preset );
+					return sprintf( __( 'Last %d days', 'webchangedetector-for-mainwp' ), $preset );
 				}
 			}
 		}
@@ -601,7 +661,7 @@ class WCD_MainWP_Runs_View {
 		}
 
 		/* translators: %s: human-readable time difference, e.g. "2 hours". */
-		return sprintf( __( '%s ago', 'webchangedetector' ), human_time_diff( $ts, time() ) );
+		return sprintf( __( '%s ago', 'webchangedetector-for-mainwp' ), human_time_diff( $ts, time() ) );
 	}
 
 	/**
@@ -613,7 +673,8 @@ class WCD_MainWP_Runs_View {
 	protected static function short_date( string $datetime ): string {
 		$ts = strtotime( $datetime );
 
-		return $ts ? date_i18n( 'd/m/Y H:i', $ts ) : '';
+		// wp_date converts the API's UTC timestamp into the dashboard's configured timezone.
+		return $ts ? wp_date( 'd/m/Y H:i', $ts ) : '';
 	}
 
 	/**

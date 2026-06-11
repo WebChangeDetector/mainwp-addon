@@ -163,7 +163,7 @@ class WCD_MainWP_Site_Map {
 		if ( empty( $managed[ $site_id ] ) ) {
 			return array(
 				'ok'    => false,
-				'error' => __( 'Unknown MainWP site.', 'webchangedetector' ),
+				'error' => __( 'Unknown MainWP site.', 'webchangedetector-for-mainwp' ),
 			);
 		}
 
@@ -171,17 +171,20 @@ class WCD_MainWP_Site_Map {
 		if ( '' === $domain ) {
 			return array(
 				'ok'    => false,
-				'error' => __( 'Could not determine the site domain.', 'webchangedetector' ),
+				'error' => __( 'Could not determine the site domain.', 'webchangedetector-for-mainwp' ),
 			);
 		}
 
-		$existing = self::for_site( $site_id );
+		$existing   = self::for_site( $site_id );
+		$manual_id  = (string) ( $existing['manual_group_uuid'] ?? '' );
+		$auto_id    = (string) ( $existing['auto_group_uuid'] ?? '' );
+		$website_id = (string) ( $existing['website_uuid'] ?? '' );
 
 		// Already provisioned: keep the group names consistent (pure domain) and flip the flag on.
-		if ( ! empty( $existing['manual_group_uuid'] ) && ! empty( $existing['website_uuid'] ) ) {
-			WCD_MainWP_API::update_group( $existing['manual_group_uuid'], array( 'name' => $domain ), $api_token );
-			if ( ! empty( $existing['auto_group_uuid'] ) ) {
-				WCD_MainWP_API::update_group( $existing['auto_group_uuid'], array( 'name' => $domain ), $api_token );
+		if ( '' !== $manual_id && '' !== $website_id ) {
+			WCD_MainWP_API::update_group( $manual_id, array( 'name' => $domain ), $api_token );
+			if ( '' !== $auto_id ) {
+				WCD_MainWP_API::update_group( $auto_id, array( 'name' => $domain ), $api_token );
 			}
 			self::save_site( $site_id, array( 'enabled' => true ) );
 
@@ -192,39 +195,53 @@ class WCD_MainWP_Site_Map {
 		}
 
 		// Create the manual + auto detection groups. Both named the bare domain (matches the
-		// customer plugin); the monitoring flag distinguishes them.
-		$manual    = WCD_MainWP_API::create_group(
-			array(
-				'name'       => $domain,
-				'monitoring' => false,
-				'enabled'    => true,
-				'cms'        => 'wordpress',
-			),
-			$api_token
-		);
-		$manual_id = self::extract_uuid( $manual );
-		if ( ! $manual_id ) {
-			return array(
-				'ok'    => false,
-				'error' => $manual['error'] ? $manual['error'] : __( 'Could not create the on-demand group.', 'webchangedetector' ),
+		// customer plugin); the monitoring flag distinguishes them. Each UUID is persisted as soon
+		// as it exists, so a retry after a partial failure reuses it instead of provisioning
+		// duplicate WCD resources.
+		if ( '' === $manual_id ) {
+			$manual    = WCD_MainWP_API::create_group(
+				array(
+					'name'       => $domain,
+					'monitoring' => false,
+					'enabled'    => true,
+					'cms'        => 'wordpress',
+				),
+				$api_token
+			);
+			$manual_id = self::extract_uuid( $manual );
+			if ( ! $manual_id ) {
+				return array(
+					'ok'    => false,
+					'error' => $manual['error'] ? $manual['error'] : __( 'Could not create the on-demand group.', 'webchangedetector-for-mainwp' ),
+				);
+			}
+			self::save_site(
+				$site_id,
+				array(
+					'manual_group_uuid' => $manual_id,
+					'domain'            => $domain,
+				)
 			);
 		}
 
-		$auto    = WCD_MainWP_API::create_group(
-			array(
-				'name'       => $domain,
-				'monitoring' => true,
-				'enabled'    => true,
-				'cms'        => 'wordpress',
-			),
-			$api_token
-		);
-		$auto_id = self::extract_uuid( $auto );
-		if ( ! $auto_id ) {
-			return array(
-				'ok'    => false,
-				'error' => $auto['error'] ? $auto['error'] : __( 'Could not create the monitoring group.', 'webchangedetector' ),
+		if ( '' === $auto_id ) {
+			$auto    = WCD_MainWP_API::create_group(
+				array(
+					'name'       => $domain,
+					'monitoring' => true,
+					'enabled'    => true,
+					'cms'        => 'wordpress',
+				),
+				$api_token
 			);
+			$auto_id = self::extract_uuid( $auto );
+			if ( ! $auto_id ) {
+				return array(
+					'ok'    => false,
+					'error' => $auto['error'] ? $auto['error'] : __( 'Could not create the monitoring group.', 'webchangedetector-for-mainwp' ),
+				);
+			}
+			self::save_site( $site_id, array( 'auto_group_uuid' => $auto_id ) );
 		}
 
 		// Create the website that links both groups.
@@ -237,7 +254,7 @@ class WCD_MainWP_Site_Map {
 		if ( ! $website['ok'] || ! $website_id || ! $link_ok ) {
 			return array(
 				'ok'    => false,
-				'error' => $website['error'] ? $website['error'] : __( 'Could not create the WebChange Detector website (groups not linked).', 'webchangedetector' ),
+				'error' => $website['error'] ? $website['error'] : __( 'Could not create the WebChange Detector website (groups not linked).', 'webchangedetector-for-mainwp' ),
 			);
 		}
 
