@@ -144,8 +144,9 @@ class WCD_MainWP_Site_Map {
 
 	/**
 	 * The security key MainWP hands registered extensions. Fetched live via the public filter.
+	 * Public: WCD_MainWP_Cache_Purge needs the same key for its child requests.
 	 */
-	protected static function extension_key(): string {
+	public static function extension_key(): string {
 		$info = apply_filters( 'mainwp_extension_enabled_check', WCD_MAINWP_PLUGIN_FILE );
 
 		return is_array( $info ) && ! empty( $info['key'] ) ? (string) $info['key'] : '';

@@ -23,12 +23,12 @@
 
 defined( 'ABSPATH' ) || exit;
 
-$headline = ( 'site' === $scope )
+$wcd_mainwp_headline = ( 'site' === $scope )
 	? __( 'Update this site with a visual safety net', 'webchangedetector-for-mainwp' )
 	: __( 'Update all sites with a visual safety net', 'webchangedetector-for-mainwp' );
 
 if ( null !== $updates_count && $updates_count > 0 ) {
-	$description = sprintf(
+	$wcd_mainwp_description = sprintf(
 		/* translators: %d: number of pending updates. */
 		_n(
 			'Capture before/after screenshots, install the %d pending update, then compare so you instantly see what changed.',
@@ -39,15 +39,15 @@ if ( null !== $updates_count && $updates_count > 0 ) {
 		$updates_count
 	);
 } else {
-	$description = __( 'Capture before/after screenshots around your updates, then compare so you instantly see what changed.', 'webchangedetector-for-mainwp' );
+	$wcd_mainwp_description = __( 'Capture before/after screenshots around your updates, then compare so you instantly see what changed.', 'webchangedetector-for-mainwp' );
 }
 ?>
 <div class="wcd-hero" data-stats-scope="<?php echo esc_attr( $scope ); ?>" data-site-id="<?php echo esc_attr( (string) $site_id ); ?>">
 	<div class="wcd-hero__icon"><i class="eye icon"></i></div>
 	<div class="wcd-hero__body">
 		<span class="wcd-hero__badge"><?php esc_html_e( 'WebChange Detector', 'webchangedetector-for-mainwp' ); ?></span>
-		<div class="wcd-hero__title"><?php echo esc_html( $headline ); ?></div>
-		<div class="wcd-hero__desc"><?php echo esc_html( $description ); ?></div>
+		<div class="wcd-hero__title"><?php echo esc_html( $wcd_mainwp_headline ); ?></div>
+		<div class="wcd-hero__desc"><?php echo esc_html( $wcd_mainwp_description ); ?></div>
 	</div>
 	<div class="wcd-hero__stats">
 		<div class="wcd-hero__stat">
@@ -70,10 +70,10 @@ if ( null !== $updates_count && $updates_count > 0 ) {
 			<div class="wcd-hero__lbl"><?php esc_html_e( 'Checks', 'webchangedetector-for-mainwp' ); ?></div>
 		</div>
 	</div>
-	<?php $no_updates = empty( $force_enabled ) && null !== $updates_count && 0 === (int) $updates_count; ?>
-	<button type="button" class="wcd-hero__cta wcd-safe-update<?php echo $no_updates ? ' is-disabled' : ''; ?>" data-scope="<?php echo esc_attr( $scope ); ?>" data-site-id="<?php echo esc_attr( (string) $site_id ); ?>" <?php disabled( $no_updates ); ?>>
-		<i class="<?php echo $no_updates ? 'ban' : 'play'; ?> icon"></i>
-		<?php echo esc_html( $no_updates ? __( 'No updates available', 'webchangedetector-for-mainwp' ) : __( 'Run visual check & update', 'webchangedetector-for-mainwp' ) ); ?>
+	<?php $wcd_mainwp_no_updates = empty( $force_enabled ) && null !== $updates_count && 0 === (int) $updates_count; ?>
+	<button type="button" class="wcd-hero__cta wcd-safe-update<?php echo $wcd_mainwp_no_updates ? ' is-disabled' : ''; ?>" data-scope="<?php echo esc_attr( $scope ); ?>" data-site-id="<?php echo esc_attr( (string) $site_id ); ?>" <?php disabled( $wcd_mainwp_no_updates ); ?>>
+		<i class="<?php echo $wcd_mainwp_no_updates ? 'ban' : 'play'; ?> icon"></i>
+		<?php echo esc_html( $wcd_mainwp_no_updates ? __( 'No updates available', 'webchangedetector-for-mainwp' ) : __( 'Run visual check & update', 'webchangedetector-for-mainwp' ) ); ?>
 	</button>
 </div>
 <?php // The unified in-card run renders here, right below the launch band (no popup). ?>

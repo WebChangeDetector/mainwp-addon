@@ -184,6 +184,11 @@ class WCD_MainWP_Update_Flow {
 
 		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
 		if ( '' !== $group_id ) {
+			// Purge the child's cache first (synchronous, behind the dedupe above) so the post
+			// screenshots capture the updated site, not a cached pre-update version. Adds one
+			// child request to MainWP's update response; acceptable at the end of an update.
+			WCD_MainWP_Cache_Purge::purge_site( $site_id );
+
 			// Fire-and-forget: never block MainWP's own update response on our screenshot call.
 			WCD_MainWP_API::take_screenshot( array( $group_id ), 'post', 'manual', '', false );
 		}

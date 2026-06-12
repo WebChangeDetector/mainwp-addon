@@ -11,7 +11,7 @@ defined( 'ABSPATH' ) || exit;
 <?php do_action( 'mainwp_pageheader_extensions', WCD_MAINWP_PLUGIN_PATH . 'webchangedetector-for-mainwp.php' ); ?>
 
 <div class="ui segment">
-	<h2 class="ui header">WebChange Detector Settings</h2>
+	<h2 class="ui header"><?php esc_html_e( 'WebChange Detector Settings', 'webchangedetector-for-mainwp' ); ?></h2>
 	<?php WCD_MainWP_Site_Settings::render_settings_form(); ?>
 </div>
 

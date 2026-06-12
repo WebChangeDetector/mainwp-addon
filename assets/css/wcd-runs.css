@@ -7,13 +7,16 @@
    No inline styles. */
 
 /* ── Filter bar (native ui mini form + selection dropdowns; only layout glue here) ── */
-/* Flex keeps every control (dropdowns, date inputs, buttons) on one vertical center line. */
-.wcd-runs .wcd-runs-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+/* Flex keeps every control (dropdowns, date inputs, buttons) on a common bottom edge, so the
+   single- and multi-select dropdowns (slightly different heights) stay visually aligned. */
+.wcd-runs .wcd-runs-filters { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 6px; font-size: 1rem;}
 .wcd-runs .wcd-runs-filters .ui.selection.dropdown { min-width: 11em; margin: 0; text-align: left; }
 .wcd-runs .wcd-runs-filters .ui.button { margin: 0; }
+.wcd-runs .wcd-runs-filters .multiple.dropdown { vertical-align: top;}
 .wcd-runs .wcd-runs-daterange { display: inline-flex; align-items: center; gap: 6px; }
 .wcd-runs .wcd-runs-daterange[hidden] { display: none; }
 .wcd-runs .wcd-runs-daterange input[type="date"] { width: auto; margin: 0; }
+
 
 /* ── Batch accordion table (native MainWP updates-table pattern) ───────── */
 .wcd-runs-list { margin-top: 8px; }

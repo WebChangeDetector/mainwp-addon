@@ -34,6 +34,7 @@ class WCD_MainWP_Bootstrap {
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-site-map.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-site-settings.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-url-sync.php';
+		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-cache-purge.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-update-flow.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-ajax.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-widget.php';
@@ -113,7 +114,7 @@ class WCD_MainWP_Bootstrap {
 		$items   = is_array( $items ) ? $items : array();
 		$page    = 'ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG;
 		$items[] = array(
-			'title'                => esc_html__( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+			'title'                => esc_html__( 'WebChange Detector', 'webchangedetector-for-mainwp' ),
 			'parent_key'           => 'Extensions-Mainwp-Monitoring',
 			'slug'                 => $page,
 			'href'                 => 'admin.php?page=' . $page,
@@ -396,6 +397,16 @@ class WCD_MainWP_Bootstrap {
 			'runFooterNote'     => __( 'Sites stay live; only screenshots are taken. Keep this tab open until the run finishes.', 'webchangedetector-for-mainwp' ),
 			'stillRunning'      => __( 'Still running. Open in WebChange Detector.', 'webchangedetector-for-mainwp' ),
 			'noChecks'          => __( 'No URLs configured for this site.', 'webchangedetector-for-mainwp' ),
+			// URL panel: search, pagination, select-all.
+			'searchUrls'        => __( 'Search URLs…', 'webchangedetector-for-mainwp' ),
+			'selectAll'         => __( 'Select all:', 'webchangedetector-for-mainwp' ),
+			'prev'              => __( 'Prev', 'webchangedetector-for-mainwp' ),
+			'next'              => __( 'Next', 'webchangedetector-for-mainwp' ),
+			/* translators: %1$s current page, %2$s last page, %3$s total URL count. */
+			'pageOf'            => __( 'Page %1$s of %2$s · %3$s URLs', 'webchangedetector-for-mainwp' ),
+			'noResults'         => __( 'No URLs match your search.', 'webchangedetector-for-mainwp' ),
+			/* translators: %s: device name (Desktop or Mobile). */
+			'confirmDisableAll' => __( 'Disable all %s checks for this site?', 'webchangedetector-for-mainwp' ),
 			'noSites'           => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ),
 			'genericError'      => __( 'Something went wrong.', 'webchangedetector-for-mainwp' ),
 			'syncing'           => __( 'Syncing URLs…', 'webchangedetector-for-mainwp' ),

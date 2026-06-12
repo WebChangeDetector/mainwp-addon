@@ -15,33 +15,33 @@ defined( 'ABSPATH' ) || exit;
 
 // One-time post-save verification result, handed over via a transient (not a $_GET flag) by
 // WCD_MainWP_Site_Settings::handle_save_settings(). Read once, then clear.
-$verified_flag = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::VERIFIED_CACHE );
-if ( false !== $verified_flag ) {
+$wcd_mainwp_verified_flag = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::VERIFIED_CACHE );
+if ( false !== $wcd_mainwp_verified_flag ) {
 	WCD_MainWP_Options::delete_transient( WCD_MainWP_Site_Settings::VERIFIED_CACHE );
 }
-$active_sites = 0;
-foreach ( $map as $entry ) {
-	if ( ! empty( $entry['enabled'] ) ) {
-		++$active_sites;
+$wcd_mainwp_active_sites = 0;
+foreach ( $map as $wcd_mainwp_entry ) {
+	if ( ! empty( $wcd_mainwp_entry['enabled'] ) ) {
+		++$wcd_mainwp_active_sites;
 	}
 }
 
-$checks_left  = isset( $account['checks_left'] ) ? (int) $account['checks_left'] : null;
-$checks_limit = isset( $account['checks_limit'] ) ? (int) $account['checks_limit'] : null;
-$checks_done  = isset( $account['checks_done'] ) ? (int) $account['checks_done'] : null;
-$used_pct     = ( $checks_limit && $checks_limit > 0 ) ? min( 100, round( ( $checks_done / $checks_limit ) * 100 ) ) : 0;
+$wcd_mainwp_checks_left  = isset( $account['checks_left'] ) ? (int) $account['checks_left'] : null;
+$wcd_mainwp_checks_limit = isset( $account['checks_limit'] ) ? (int) $account['checks_limit'] : null;
+$wcd_mainwp_checks_done  = isset( $account['checks_done'] ) ? (int) $account['checks_done'] : null;
+$wcd_mainwp_used_pct     = ( $wcd_mainwp_checks_limit && $wcd_mainwp_checks_limit > 0 ) ? min( 100, round( ( $wcd_mainwp_checks_done / $wcd_mainwp_checks_limit ) * 100 ) ) : 0;
 ?>
 
-<?php if ( '1' === $verified_flag ) : ?>
+<?php if ( '1' === $wcd_mainwp_verified_flag ) : ?>
 	<div class="ui positive message"><p><?php esc_html_e( 'Settings saved and API token verified.', 'webchangedetector-for-mainwp' ); ?></p></div>
 	<?php
-elseif ( '0' === $verified_flag ) :
-	$token_error = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::ERROR_CACHE );
+elseif ( '0' === $wcd_mainwp_verified_flag ) :
+	$wcd_mainwp_token_error = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::ERROR_CACHE );
 	?>
 	<div class="ui negative message">
 		<p><?php esc_html_e( 'Settings saved, but the API token could not be verified.', 'webchangedetector-for-mainwp' ); ?></p>
-		<?php if ( is_string( $token_error ) && '' !== $token_error ) : ?>
-			<p><strong><?php esc_html_e( 'Reason:', 'webchangedetector-for-mainwp' ); ?></strong> <?php echo esc_html( $token_error ); ?></p>
+		<?php if ( is_string( $wcd_mainwp_token_error ) && '' !== $wcd_mainwp_token_error ) : ?>
+			<p><strong><?php esc_html_e( 'Reason:', 'webchangedetector-for-mainwp' ); ?></strong> <?php echo esc_html( $wcd_mainwp_token_error ); ?></p>
 		<?php endif; ?>
 	</div>
 <?php endif; ?>
@@ -88,22 +88,22 @@ elseif ( '0' === $verified_flag ) :
 			<div class="wcd-account-value"><?php echo esc_html( $account['plan_name'] ?? '-' ); ?></div>
 		</div>
 		<div class="eight wide middle aligned column">
-			<div class="wcd-progress"><div class="wcd-progress-bar wcd-w-<?php echo esc_attr( (string) ( (int) ( round( $used_pct / 5 ) * 5 ) ) ); ?>"></div></div>
+			<div class="wcd-progress"><div class="wcd-progress-bar wcd-w-<?php echo esc_attr( (string) ( (int) ( round( $wcd_mainwp_used_pct / 5 ) * 5 ) ) ); ?>"></div></div>
 			<div class="wcd-account-label">
 				<?php
-				if ( null !== $checks_left && null !== $checks_limit ) {
+				if ( null !== $wcd_mainwp_checks_left && null !== $wcd_mainwp_checks_limit ) {
 					printf(
 						/* translators: 1: remaining checks, 2: total checks. */
 						esc_html__( '%1$s of %2$s checks available', 'webchangedetector-for-mainwp' ),
-						'<b>' . esc_html( (string) $checks_left ) . '</b>',
-						esc_html( (string) $checks_limit )
+						'<b>' . esc_html( (string) $wcd_mainwp_checks_left ) . '</b>',
+						esc_html( (string) $wcd_mainwp_checks_limit )
 					);
 				}
 				?>
 			</div>
 		</div>
 		<div class="four wide right aligned column">
-			<div class="wcd-account-value"><?php echo esc_html( (string) $active_sites ); ?></div>
+			<div class="wcd-account-value"><?php echo esc_html( (string) $wcd_mainwp_active_sites ); ?></div>
 			<div class="wcd-account-label"><?php esc_html_e( 'Active sites', 'webchangedetector-for-mainwp' ); ?></div>
 		</div>
 	</div>

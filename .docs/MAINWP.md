@@ -55,6 +55,7 @@ webchangedetector-for-mainwp/
 │   ├── class-wcd-mainwp-site-map.php       # MainWP site <-> WCD website/group mapping + domain normalization
 │   ├── class-wcd-mainwp-site-settings.php  # API token, verification, account cache, settings page, auto-enable on add
 │   ├── class-wcd-mainwp-url-sync.php       # Fetch child URLs (posts hook + pages guarded) -> two-step sync
+│   ├── class-wcd-mainwp-cache-purge.php    # Child-site cache purge via mainwp_fetchurlauthed + cache_purge_action
 │   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + after-update hook safety-net + pending-update counts
 │   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview)
 │   ├── class-wcd-mainwp-runs-view.php      # "Visual Checks" overview page (filters + batch/list rendering)
@@ -160,11 +161,21 @@ On confirm the popup closes and the **whole run plays out in ONE unified card re
 page** (the `.wcd-run-host` container right below the launch band; no running modal). The browser is
 the scheduler and orchestrates the phases as **barriers** so every site advances together:
 
-1. **PRE**: ONE `take_pre` call with all check-enabled sites -> poll all batches aggregated until done.
+1. **PRE**: ONE `take_pre` call with all check-enabled sites -> **purge each site's child cache**
+   (synchronous, best effort) -> dispatch the pre batches -> poll all batches aggregated until done.
 2. **UPDATES**: `run_update` per site (sequential) -> `execute_update_site_*` (guarded, synchronous;
-   suppresses the after-update hook so post is not double-fired). A per-site failure (e.g. offline) is
-   tolerated; "nothing to update" is success-no-post.
+   suppresses the after-update hook so post is not double-fired) -> **purge the site's child cache**
+   when anything was updated. A per-site failure (e.g. offline) is tolerated; "nothing to update" is
+   success-no-post.
 3. **POST**: ONE `take_post` call with all sites -> poll aggregated -> `get comparisons` per batch.
+
+**Cache purging** (`WCD_MainWP_Cache_Purge`): both purges go through the documented
+`mainwp_fetchurlauthed` filter with the `cache_purge_action` child callable (ships with MainWP Child
+core; auto-detects 20+ cache plugins — see MAINWP-HOOKS.md). Purging before PRE and after the
+updates means pre and post screenshots both capture freshly generated pages: a stale cached pre
+diffed against a fresh post would produce false positives, and a cached post would hide the update's
+changes entirely. Failures are WP_DEBUG-logged and never block the run; the resume path re-purges
+before dispatching late post batches (belt and braces).
 
 `take_pre`/`take_post` accept `site_ids[]` (single `site_id` still supported) and deliberately do
 NOT re-apply the pending-updates filter (stale MainWP sync data must never block an explicit run;
@@ -200,7 +211,8 @@ credit bar) use the `.wcd-w-*` step utilities, never inline styles.
 
 **After-update hook safety-net** (`mainwp_after_*`): for updates started outside our card
 (cron/native). Deduped per site via a short transient; suppressed while the card flow owns the run.
-Post-only (no reliable pre in a synchronous before-hook).
+Post-only (no reliable pre in a synchronous before-hook). Purges the site's child cache (behind the
+same dedupe) right before enqueuing the post screenshots.
 
 **Run-state persistence + resume**: because the browser orchestrates the run, every phase transition
 is also persisted server-side in the `wcd_mainwp_active_run` option (`WCD_MainWP_Update_Flow`
@@ -279,8 +291,9 @@ MainWP theme, so light/dark both work.
 
 The add-on ships a `phpcs.xml.dist` (WordPress standard, text domain `webchangedetector`, prefixes
 `WCD_MainWP` / `webchangedetector`) and a `composer.json` with the WPCS dev dependency. Run
-`composer install` then `composer lint` (or `composer lint:fix`). The tree is clean: **0 phpcs errors/warnings,
-0 ignores**. All identifiers are snake_case; class files follow `class-{name}.php`.
+`composer install` then `composer lint` (or `composer lint:fix`). The tree is clean: **0 phpcs errors/warnings**;
+the only inline ignore is the documented WP_DEBUG `error_log` in the cache-purge logger
+(`class-wcd-mainwp-cache-purge.php`). All identifiers are snake_case; class files follow `class-{name}.php`.
 
 ## Local Dev
 

@@ -16,7 +16,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'mainwp_pageheader_sites', WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
 
 if ( '' === $token ) {
-	$wcd_account_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
+	$wcd_mainwp_account_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
 	WCD_MainWP_Runs_View::render_tabs( 'settings' );
 	?>
 	<div class="ui bottom attached padded segment">
@@ -25,7 +25,7 @@ if ( '' === $token ) {
 			printf(
 				/* translators: %s: settings page URL. */
 				wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
-				esc_url( $wcd_account_url )
+				esc_url( $wcd_mainwp_account_url )
 			);
 			?>
 		</p></div>
@@ -46,26 +46,26 @@ WCD_MainWP_Runs_View::render_tabs( 'settings' );
 	<?php else : ?>
 		<div class="ui segments">
 			<?php
-			foreach ( $sites as $site ) :
-				$sid     = (int) $site['id'];
-				$enabled = ! empty( $map[ $sid ]['enabled'] );
+			foreach ( $sites as $wcd_mainwp_site ) :
+				$wcd_mainwp_sid     = (int) $wcd_mainwp_site['id'];
+				$wcd_mainwp_enabled = ! empty( $map[ $wcd_mainwp_sid ]['enabled'] );
 				?>
-				<div class="ui segment wcd-site" data-site-id="<?php echo esc_attr( (string) $sid ); ?>">
+				<div class="ui segment wcd-site" data-site-id="<?php echo esc_attr( (string) $wcd_mainwp_sid ); ?>">
 					<div class="wcd-site-head">
 						<div class="ui toggle checkbox">
-							<input type="checkbox" class="wcd-site-toggle" <?php checked( $enabled ); ?> />
+							<input type="checkbox" class="wcd-site-toggle" <?php checked( $wcd_mainwp_enabled ); ?> />
 							<label></label>
 						</div>
 						<div class="wcd-site-meta">
-							<div class="wcd-site-name"><?php echo esc_html( $site['name'] ); ?></div>
-							<div class="wcd-site-domain"><?php echo esc_html( $site['domain'] ); ?></div>
+							<div class="wcd-site-name"><?php echo esc_html( $wcd_mainwp_site['name'] ); ?></div>
+							<div class="wcd-site-domain"><?php echo esc_html( $wcd_mainwp_site['domain'] ); ?></div>
 						</div>
-						<div class="wcd-site-urlcount" data-role="urlcount"><?php echo $enabled ? '' : esc_html__( 'Disabled', 'webchangedetector-for-mainwp' ); ?></div>
+						<div class="wcd-site-urlcount" data-role="urlcount"><?php echo $wcd_mainwp_enabled ? '' : esc_html__( 'Disabled', 'webchangedetector-for-mainwp' ); ?></div>
 						<div class="wcd-site-actions">
-							<button type="button" class="ui mini button wcd-sync-urls" <?php disabled( ! $enabled ); ?>>
+							<button type="button" class="ui mini button wcd-sync-urls" <?php disabled( ! $wcd_mainwp_enabled ); ?>>
 								<?php esc_html_e( 'Sync WP URLs', 'webchangedetector-for-mainwp' ); ?>
 							</button>
-							<button type="button" class="ui mini button wcd-configure-urls" <?php disabled( ! $enabled ); ?>>
+							<button type="button" class="ui mini button wcd-configure-urls" <?php disabled( ! $wcd_mainwp_enabled ); ?>>
 								<?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?>
 							</button>
 						</div>

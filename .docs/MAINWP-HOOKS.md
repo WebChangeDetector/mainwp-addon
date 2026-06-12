@@ -31,6 +31,7 @@ the user to run the native update; the after-update hook still drives the post s
 | `mainwp_menu_extensions_left_menu` | filter | `$items` | Adds the "Visual Checks" entry (level 2, `parent_key => 'Extensions-Mainwp-Monitoring'`, `active_path`) to the left menu's Monitoring category group. This is MainWP's documented way for third-party pages to join a category group (consumed in `page-mainwp-extensions-groups.php`) |
 | `mainwp_getmetaboxes` | filter | `$metaboxes` | Dashboard widget (account/credits) |
 | `mainwp_getdbsites` | filter | `$pluginFile, $key, $sites, $groups, $options, $clients` | List managed child sites (id, url, name) |
+| `mainwp_fetchurlauthed` | filter | `$pluginFile, $key, $websiteId, $what, $params, $rawResponse = null` | Dashboard-to-child RPC for registered extensions. We call it with `$what = 'cache_purge_action'` to purge the child's page cache (see "Cache purging" below) |
 | `mainwp_site_synced` | action | `$pWebsite, $information` | After a child site syncs -> sync its URLs to the WCD group |
 | `mainwp_added_new_site` | action | `$id, $website` | Auto-enable a newly added child site for WCD (provision website/groups + URL sync), when the "Auto-enable new sites" setting is on. Best-effort: errors are swallowed so MainWP's add-site never breaks |
 | `mainwp_getallposts` | filter/hook | `$data` (search params) | Fetch a child's posts (hooks-first; pages use the sanctioned call) |
@@ -50,6 +51,31 @@ the user to run the native update; the after-update hook still drives the post s
 - `mainwp_website_before_updated` / `mainwp_website_updated` fire per low-level fetch (per update
   type), so they are noisier; we do not rely on them.
 - There is **no** hook to trigger updates and **no** hook that exposes a child's full page list.
+
+## Cache purging via `mainwp_fetchurlauthed` (documented filter, NOT an internal-call exception)
+
+Screenshots must show the freshly generated page, so the add-on purges the child's page cache
+before the pre screenshots and after each site's updates (`WCD_MainWP_Cache_Purge`). The purge
+logic itself ships with the **MainWP Child core plugin** (`MainWP_Child_Cache_Purge`, 20+ cache
+plugins auto-detected on every pageload into the child option `mainwp_cache_control_cache_solution`);
+no Cache Control extension is needed on either side.
+
+- Call: `apply_filters( 'mainwp_fetchurlauthed', WCD_MAINWP_PLUGIN_FILE, $extension_key, $site_id, 'cache_purge_action', array() )`.
+  The filtered value IS the plugin file, then the extension key (same convention as `mainwp_getsites`).
+  The key comes from the public `mainwp_extension_enabled_check` filter (`WCD_MainWP_Site_Map::extension_key()`).
+- The child callable runs `auto_purge_cache('true')`: the `'true'` **forces** the purge even when the
+  child's Cache Control setting is off. "No cache plugin detected" returns `status: Disabled, action: SUCCESS`
+  (counts as done). mainwp-child < 4.3 (2022) lacks the callable and returns an error.
+- Best effort: failures are WP_DEBUG-logged and never block a run. Synchronous: when the call
+  returns, the purge has happened, so screenshots dispatched afterwards see regenerated pages.
+- Sites whose MainWP website row carries `sync_errors` are skipped (read-only `get_website_by_id`
+  check, same pattern as the pending-update reads below): an unreachable child would only burn the
+  10s connection timeout per site, run-wide in the PRE phase. Known worst case we accept: a child
+  that accepts the connection but never responds inherits MainWP's very long `CURLOPT_TIMEOUT` and
+  stalls the requesting AJAX call; not preventable through the documented filter.
+- We do NOT rely on MainWP's Cache Control extension for this: it would be an install dependency
+  and gives no ordering guarantee relative to our post screenshots. If it is installed, its extra
+  purge is harmless.
 
 ## Sanctioned internal calls (guarded)
 

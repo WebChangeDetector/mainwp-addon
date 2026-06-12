@@ -203,11 +203,63 @@
         }).finally(function () { checkbox.disabled = false; });
     }
 
-    function renderUrlRows(card, urls) {
+    // Build the URL panel skeleton (toolbar + list + pager) once per open. The toolbar persists
+    // across page loads so the search input keeps its value and focus. Pagination state lives on
+    // the card DOM (data-url-page / data-url-search).
+    function ensureUrlPanel(card) {
         var box = card.querySelector('[data-role="urlconfig"]');
+        if (box.querySelector('[data-role="urllist"]')) { return box; }
         box.innerHTML = '';
+
+        // Search submits explicitly (Enter / icon / native clear) — no debounce, to keep the
+        // requests rare and the flow simple (rapid reloads self-heal: the last response wins).
+        var searchInput = el('input', { type: 'search', placeholder: t('searchUrls') });
+        searchInput.value = card.getAttribute('data-url-search') || '';
+        function submitSearch() {
+            card.setAttribute('data-url-search', searchInput.value.trim());
+            card.setAttribute('data-url-page', '1');
+            loadUrls(card);
+        }
+        searchInput.addEventListener('keydown', function (e) {
+            if ('Enter' === e.key) { e.preventDefault(); submitSearch(); }
+        });
+        searchInput.addEventListener('search', function () {
+            // Native clear (×) only; the guard also stops WebKit's extra `search` event on Enter
+            // from double-submitting.
+            if ('' === searchInput.value && '' !== (card.getAttribute('data-url-search') || '')) { submitSearch(); }
+        });
+        var searchIcon = el('i', { class: 'search link icon' });
+        searchIcon.addEventListener('click', submitSearch);
+
+        var selectAll = el('div', { class: 'wcd-url-selectall' }, [
+            el('span', { class: 'wcd-muted', text: t('selectAll') })
+        ]);
+        ['desktop', 'mobile'].forEach(function (kind) {
+            var input = el('input', { type: 'checkbox' });
+            input.addEventListener('change', function () { onSelectAll(card, kind, input); });
+            selectAll.appendChild(el('label', {}, [input, ' ' + t(kind)]));
+        });
+
+        box.appendChild(el('div', { class: 'wcd-url-toolbar' }, [
+            el('div', { class: 'ui mini icon input' }, [searchInput, searchIcon]),
+            selectAll
+        ]));
+        box.appendChild(el('div', { 'data-role': 'urllist' }));
+        box.appendChild(el('div', { class: 'wcd-url-pager', 'data-role': 'urlpager' }));
+        return box;
+    }
+
+    function updateUrlCount(card, active, total) {
+        var count = card.querySelector('[data-role="urlcount"]');
+        if (count) { count.textContent = active + ' / ' + total; }
+    }
+
+    function renderUrlRows(card, urls) {
+        var list = card.querySelector('[data-role="urllist"]');
+        list.innerHTML = '';
         if (!urls.length) {
-            box.appendChild(el('p', { class: 'wcd-muted', text: t('noChecks') }));
+            var searching = '' !== (card.getAttribute('data-url-search') || '');
+            list.appendChild(el('p', { class: 'wcd-muted', text: t(searching ? 'noResults' : 'noChecks') }));
             return;
         }
         urls.forEach(function (u) {
@@ -225,24 +277,104 @@
                     api('update_url', { site_id: siteIdOf(card), url_id: u.id, desktop: desktop ? 1 : 0, mobile: mobile ? 1 : 0 })
                         .catch(function (e) { input.checked = !input.checked; window.alert(e.message); });
                 });
-                vp.appendChild(el('label', {}, [input, document.createTextNode(' ' + kind)]));
+                vp.appendChild(el('label', {}, [input, document.createTextNode(' ' + t(kind))]));
             });
-            box.appendChild(el('div', { class: 'wcd-url-row' }, [info, vp]));
+            list.appendChild(el('div', { class: 'wcd-url-row' }, [info, vp]));
+        });
+    }
+
+    function renderUrlPager(card, data) {
+        var pager = card.querySelector('[data-role="urlpager"]');
+        pager.innerHTML = '';
+        var meta = data.meta || {};
+        var lastPage = meta.last_page || 1;
+        if (lastPage <= 1) { return; }
+        var prev = el('button', { type: 'button', class: 'ui mini basic button', text: t('prev') });
+        var next = el('button', { type: 'button', class: 'ui mini basic button', text: t('next') });
+        prev.disabled = meta.current_page <= 1;
+        next.disabled = meta.current_page >= lastPage;
+        prev.addEventListener('click', function () { gotoUrlPage(card, meta.current_page - 1); });
+        next.addEventListener('click', function () { gotoUrlPage(card, meta.current_page + 1); });
+        pager.appendChild(prev);
+        pager.appendChild(next);
+        pager.appendChild(el('span', {
+            class: 'wcd-url-pageinfo',
+            text: fmt(t('pageOf'), { '%1$s': meta.current_page, '%2$s': lastPage, '%3$s': data.total })
+        }));
+    }
+
+    function gotoUrlPage(card, page) {
+        card.setAttribute('data-url-page', page);
+        loadUrls(card);
+    }
+
+    // Shared render path for loadUrls/pollUrls. The header count only updates without a search
+    // (a filtered total would misrepresent the site); the unfiltered total is cached on the card
+    // so the select-all handler can refresh the count while a search is active.
+    function renderUrlPanel(card, data) {
+        var box = ensureUrlPanel(card);
+        box.hidden = false;
+        var search = card.getAttribute('data-url-search') || '';
+        var meta = data.meta || {};
+        if (!data.urls.length && (meta.current_page || 1) > (meta.last_page || 1)) {
+            // The list shrank (e.g. re-sync) while the user sat on a now-out-of-range page.
+            card.setAttribute('data-url-page', meta.last_page || 1);
+            loadUrls(card);
+            return;
+        }
+        box.querySelector('.wcd-url-toolbar').hidden = ('' === search && 0 === data.total);
+        // Select-all targets the WHOLE group, so hide it while a search filters the list — a user
+        // looking at 3 matches must not silently enable checks for every URL of the site.
+        box.querySelector('.wcd-url-selectall').hidden = ('' !== search);
+        renderUrlRows(card, data.urls);
+        renderUrlPager(card, data);
+        if ('' === search) {
+            card.setAttribute('data-url-total', data.total);
+            updateUrlCount(card, data.active, data.total);
+        }
+    }
+
+    // Select-all is a stateless action control: the API has no per-device selected counts, so a
+    // derived checked-state would require fetching every URL — exactly what pagination removes.
+    // No optimistic UI; the reload after the bulk call shows server truth (also settling any race
+    // with an in-flight single toggle: last write wins server-side).
+    function onSelectAll(card, kind, toggle) {
+        var enabled = toggle.checked;
+        if (!enabled && !window.confirm(fmt(t('confirmDisableAll'), { '%s': t(kind) }))) {
+            toggle.checked = true;
+            return;
+        }
+        var box = card.querySelector('[data-role="urlconfig"]');
+        var controls = box.querySelectorAll('input, button');
+        controls.forEach(function (c) { c.disabled = true; });
+        api('update_all_urls', { site_id: siteIdOf(card), device: kind, enabled: enabled ? 1 : 0 }).then(function (data) {
+            if (data && 'undefined' !== typeof data.active) {
+                updateUrlCount(card, data.active, card.getAttribute('data-url-total') || data.active);
+            }
+        }).catch(function (e) {
+            toggle.checked = !enabled;
+            window.alert(e.message);
+        }).finally(function () {
+            controls.forEach(function (c) { c.disabled = false; });
+            loadUrls(card);
         });
     }
 
     function loadUrls(card) {
-        var box = card.querySelector('[data-role="urlconfig"]');
+        var box = ensureUrlPanel(card);
         box.hidden = false;
-        box.innerHTML = '';
-        box.appendChild(el('div', { class: 'ui active inline loader' }));
-        return api('get_site_urls', { site_id: siteIdOf(card) }).then(function (data) {
-            renderUrlRows(card, data.urls);
-            var count = card.querySelector('[data-role="urlcount"]');
-            if (count) { count.textContent = data.active + ' / ' + data.total; }
+        var list = box.querySelector('[data-role="urllist"]');
+        list.innerHTML = '';
+        list.appendChild(el('div', { class: 'ui active inline loader' }));
+        return api('get_site_urls', {
+            site_id: siteIdOf(card),
+            page: parseInt(card.getAttribute('data-url-page'), 10) || 1,
+            search: card.getAttribute('data-url-search') || ''
+        }).then(function (data) {
+            renderUrlPanel(card, data);
         }).catch(function (e) {
-            box.innerHTML = '';
-            box.appendChild(el('p', { class: 'wcd-error', text: e.message }));
+            list.innerHTML = '';
+            list.appendChild(el('p', { class: 'wcd-error', text: e.message }));
         });
     }
 
@@ -270,12 +402,13 @@
 
     // start-sync is queued server-side; poll the group URLs until they appear.
     function pollUrls(card, tries) {
-        return api('get_site_urls', { site_id: siteIdOf(card) }).then(function (data) {
+        card.setAttribute('data-url-page', '1');
+        card.setAttribute('data-url-search', '');
+        var searchInput = card.querySelector('[data-role="urlconfig"] input[type="search"]');
+        if (searchInput) { searchInput.value = ''; }
+        return api('get_site_urls', { site_id: siteIdOf(card), page: 1 }).then(function (data) {
             if (data.total > 0 || tries >= 10) {
-                renderUrlRows(card, data.urls);
-                card.querySelector('[data-role="urlconfig"]').hidden = false;
-                var count = card.querySelector('[data-role="urlcount"]');
-                if (count) { count.textContent = data.active + ' / ' + data.total; }
+                renderUrlPanel(card, data);
                 return;
             }
             return delay(2000).then(function () { return pollUrls(card, tries + 1); });
@@ -1138,7 +1271,9 @@
         var $ = (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') ? window.jQuery : null;
         if ($) {
             $('#wcd-runs-period', root).dropdown({ onChange: function (value) { applyPeriod(String(value)); } });
-            $('#wcd-runs-visual, #wcd-runs-status, #wcd-runs-website', root).dropdown();
+            $('#wcd-runs-visual', root).dropdown();
+            // Status + website are searchable multiselects: typing filters the items (substring match).
+            $('#wcd-runs-status, #wcd-runs-website', root).dropdown({ fullTextSearch: true });
         }
 
         function toggleBatch(batchEl) {
@@ -1185,6 +1320,10 @@
                 $('#wcd-runs-period', root).dropdown('set selected', '30');
                 $('#wcd-runs-visual', root).dropdown('set selected', '0');
                 $('#wcd-runs-status, #wcd-runs-website', root).dropdown('clear');
+                // Fomantic's `clear` empties the chips/hidden input but not the typed search text;
+                // wipe it explicitly so Reset is deterministic even if the field keeps focus.
+                root.querySelectorAll('#wcd-runs-status .search, #wcd-runs-website .search')
+                    .forEach(function (s) { s.value = ''; });
             }
             applyFilters();
         }

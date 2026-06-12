@@ -21,6 +21,12 @@ class WCD_MainWP_Widget {
 	 * @return void
 	 */
 	public static function render_metabox(): void {
+		// Self-contained capability gate: the widget only exposes account data to admins, matching
+		// the manage_options gate on every settings/AJAX path (MainWP also gates the dashboard).
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
 		$token   = WCD_MainWP_Site_Settings::get_global();
 		$account = array();
 		$error   = '';

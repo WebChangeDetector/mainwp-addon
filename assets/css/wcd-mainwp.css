@@ -62,6 +62,12 @@
 .wcd-url-path { font-size: 11.5px; color: var(--wcd-accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wcd-vp { display: inline-flex; gap: 6px; }
 .wcd-vp label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--wcd-muted); }
+.wcd-url-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--wcd-border); }
+.wcd-url-selectall { display: inline-flex; align-items: center; gap: 10px; }
+.wcd-url-selectall label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--wcd-muted); cursor: pointer; }
+.wcd-url-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.wcd-url-pager:empty { display: none; }
+.wcd-url-pageinfo { margin-left: auto; font-size: 12.5px; color: var(--wcd-muted); font-variant-numeric: tabular-nums; }
 
 /* ── Widget ────────────────────────────────────────────────────────────── */
 .wcd-widget-table { width: 100%; border-collapse: collapse; font-size: 13px; }

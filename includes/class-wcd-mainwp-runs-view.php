@@ -86,7 +86,7 @@ class WCD_MainWP_Runs_View {
 	 */
 	public static function register_page( array $sub_pages ): array {
 		$sub_pages[] = array(
-			'title'       => __( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+			'title'       => __( 'WebChange Detector', 'webchangedetector-for-mainwp' ),
 			'slug'        => self::PAGE_SLUG,
 			'sitetab'     => false,
 			'menu_hidden' => true,
@@ -120,7 +120,7 @@ class WCD_MainWP_Runs_View {
 		$tabs = array(
 			'checks'   => array(
 				'href'  => admin_url( 'admin.php?page=ManageSites' . self::PAGE_SLUG ),
-				'label' => __( 'Visual Checks', 'webchangedetector-for-mainwp' ),
+				'label' => __( 'Checks', 'webchangedetector-for-mainwp' ),
 			),
 			'settings' => array(
 				'href'  => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG ),

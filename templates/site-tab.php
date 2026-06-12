@@ -9,13 +9,13 @@ defined( 'ABSPATH' ) || exit;
 
 // Resolve the current site id from MainWP's own context (same guarded helper the bootstrap uses)
 // instead of reading the unnonced $_GET['id'] navigation parameter.
-$wcd_util = '\\MainWP\\Dashboard\\MainWP_System_Utility';
-$site_id  = ( class_exists( $wcd_util ) && method_exists( $wcd_util, 'get_current_wpid' ) ) ? (int) $wcd_util::get_current_wpid() : 0;
-$token    = WCD_MainWP_Site_Settings::get_global();
-$enabled  = $site_id && WCD_MainWP_Site_Map::is_enabled( $site_id );
+$wcd_mainwp_util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
+$wcd_mainwp_site_id = ( class_exists( $wcd_mainwp_util ) && method_exists( $wcd_mainwp_util, 'get_current_wpid' ) ) ? (int) $wcd_mainwp_util::get_current_wpid() : 0;
+$wcd_mainwp_token   = WCD_MainWP_Site_Settings::get_global();
+$wcd_mainwp_enabled = $wcd_mainwp_site_id && WCD_MainWP_Site_Map::is_enabled( $wcd_mainwp_site_id );
 // Token/account live on the extension page; site enabling + URL selection on the Settings tab.
-$account_page = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
-$settings     = admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
+$wcd_mainwp_account_page = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
+$wcd_mainwp_settings     = admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
 ?>
 
 <?php do_action( 'mainwp_pageheader_sites', 'WcdVisualRegressionTesting' ); ?>
@@ -23,41 +23,41 @@ $settings     = admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settin
 <div class="ui segment">
 	<h3 class="ui header"><?php esc_html_e( 'WebChange Detector', 'webchangedetector-for-mainwp' ); ?></h3>
 
-	<?php if ( '' === $token ) : ?>
+	<?php if ( '' === $wcd_mainwp_token ) : ?>
 		<div class="ui negative message">
 			<p>
 				<?php
 				printf(
 					/* translators: %s: settings page URL. */
 					wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
-					esc_url( $account_page )
+					esc_url( $wcd_mainwp_account_page )
 				);
 				?>
 			</p>
 		</div>
-	<?php elseif ( ! $enabled ) : ?>
+	<?php elseif ( ! $wcd_mainwp_enabled ) : ?>
 		<div class="ui info message">
 			<p>
 				<?php
 				printf(
 					/* translators: %s: settings page URL. */
 					wp_kses_post( __( 'This site is not enabled for visual checks yet. Enable it in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
-					esc_url( $settings )
+					esc_url( $wcd_mainwp_settings )
 				);
 				?>
 			</p>
 		</div>
 		<?php
 	else :
-		$updates_count = WCD_MainWP_Update_Flow::pending_updates_count( array( $site_id ) );
-		$no_updates    = ( null !== $updates_count && 0 === (int) $updates_count );
+		$wcd_mainwp_updates_count = WCD_MainWP_Update_Flow::pending_updates_count( array( $wcd_mainwp_site_id ) );
+		$wcd_mainwp_no_updates    = ( null !== $wcd_mainwp_updates_count && 0 === (int) $wcd_mainwp_updates_count );
 		?>
 		<p class="wcd-muted"><?php esc_html_e( 'Run a safe update for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector-for-mainwp' ); ?></p>
-		<button type="button" class="ui green button wcd-safe-update<?php echo $no_updates ? ' disabled' : ''; ?>" data-scope="site" data-site-id="<?php echo esc_attr( (string) $site_id ); ?>" <?php disabled( $no_updates ); ?>>
+		<button type="button" class="ui green button wcd-safe-update<?php echo $wcd_mainwp_no_updates ? ' disabled' : ''; ?>" data-scope="site" data-site-id="<?php echo esc_attr( (string) $wcd_mainwp_site_id ); ?>" <?php disabled( $wcd_mainwp_no_updates ); ?>>
 			<i class="eye icon"></i> <?php esc_html_e( 'On-Demand Safe Update', 'webchangedetector-for-mainwp' ); ?>
 		</button>
-		<a href="<?php echo esc_url( $settings ); ?>" class="ui button"><?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?></a>
-		<?php if ( $no_updates ) : ?>
+		<a href="<?php echo esc_url( $wcd_mainwp_settings ); ?>" class="ui button"><?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?></a>
+		<?php if ( $wcd_mainwp_no_updates ) : ?>
 			<p class="wcd-muted wcd-mt"><?php esc_html_e( 'No updates available for this site right now.', 'webchangedetector-for-mainwp' ); ?></p>
 		<?php endif; ?>
 	<?php endif; ?>

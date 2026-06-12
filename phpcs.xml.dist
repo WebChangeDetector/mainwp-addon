@@ -42,15 +42,11 @@
 		</properties>
 	</rule>
 
-	<!-- Template files use local-scope variables passed via include, not true globals -->
-	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound">
-		<exclude-pattern>*/templates/*</exclude-pattern>
-	</rule>
-
 	<!-- We invoke MainWP's own documented hooks (mainwp_getsites, mainwp_pageheader_extensions,
 	     mainwp_pagefooter_sites, etc.) verbatim — they are MainWP's hook names, not ours to prefix.
 	     This is the same exception the customer plugin uses for third-party hooks (WPML/LiteSpeed). -->
 	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound">
+		<exclude-pattern>*/includes/class-wcd-mainwp-cache-purge.php</exclude-pattern>
 		<exclude-pattern>*/includes/class-wcd-mainwp-site-map.php</exclude-pattern>
 		<exclude-pattern>*/includes/class-wcd-mainwp-url-sync.php</exclude-pattern>
 		<exclude-pattern>*/templates/admin-page.php</exclude-pattern>

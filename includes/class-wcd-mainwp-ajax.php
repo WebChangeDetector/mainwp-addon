@@ -22,6 +22,17 @@ class WCD_MainWP_Ajax {
 	// execution window: 50 sites cost ceil(50/10) take calls instead of 50 (same as the webapp).
 	const TAKE_CHUNK = 10;
 
+	// URL list page size on the Settings tab.
+	const URL_PAGE_SIZE = 50;
+
+	// Select-all: id-fetch page size and a runaway cap (20k URLs is beyond any sane child site).
+	const SELECT_ALL_PER_PAGE  = 1000;
+	const SELECT_ALL_MAX_PAGES = 20;
+
+	// URLs per bulk PUT. The API matches every payload item against ALL group URLs in memory
+	// (O(items x urls)), so one huge PUT risks its PHP timeout; chunking bounds each request.
+	const SELECT_ALL_PUT_CHUNK = 500;
+
 	/**
 	 * Register every AJAX action handler.
 	 *
@@ -33,6 +44,7 @@ class WCD_MainWP_Ajax {
 			'sync_urls',
 			'get_site_urls',
 			'update_url',
+			'update_all_urls',
 			'banner_stats',
 			'preflight',
 			'take_pre',
@@ -165,19 +177,52 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
+	 * Build the group-urls API filters from the request.
+	 *
+	 * No `page` param means legacy mode: the full list in one call (the preflight popup depends on
+	 * this shape). With `page`, the Settings tab gets a paginated slice, selected URLs first, with
+	 * an optional title/url search.
+	 *
+	 * @return array
+	 */
+	protected static function url_list_filters(): array {
+		if ( ! check_ajax_referer( self::NONCE, 'nonce', false ) || ! isset( $_POST['page'] ) ) {
+			return array( 'per_page' => 1000 );
+		}
+
+		$filters = array(
+			'page'     => max( 1, (int) $_POST['page'] ),
+			'per_page' => self::URL_PAGE_SIZE,
+			'sorted'   => 'selected',
+		);
+
+		$search = isset( $_POST['search'] ) ? sanitize_text_field( wp_unslash( $_POST['search'] ) ) : '';
+		if ( '' !== $search ) {
+			$filters['search'] = $search;
+		}
+
+		return $filters;
+	}
+
+	/**
 	 * Return a site's group URLs with desktop/mobile selection state and active counts.
+	 *
+	 * Legacy mode (no `page` param) returns the full list with per-list counts; paginated mode adds
+	 * a `meta` block and group-wide counts from the API meta (with a search, `total` is the
+	 * filtered total the pager needs).
 	 *
 	 * @return void
 	 */
 	public static function get_site_urls(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$site_id  = self::site_id();
-		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+		$site_id   = self::site_id();
+		$paginated = isset( $_POST['page'] );
+		$group_id  = WCD_MainWP_Site_Map::get_manual_group( $site_id );
 		if ( '' === $group_id ) {
 			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		$response = WCD_MainWP_API::get_group_urls( $group_id, self::token(), array( 'per_page' => 1000 ) );
+		$response = WCD_MainWP_API::get_group_urls( $group_id, self::token(), self::url_list_filters() );
 		if ( ! $response['ok'] ) {
 			wp_send_json_error( array( 'message' => $response['error'] ) );
 		}
@@ -200,13 +245,24 @@ class WCD_MainWP_Ajax {
 			);
 		}
 
-		wp_send_json_success(
-			array(
-				'urls'   => $clean,
-				'active' => $active,
-				'total'  => count( $clean ),
-			)
+		$payload = array(
+			'urls'   => $clean,
+			'active' => $active,
+			'total'  => count( $clean ),
 		);
+
+		if ( $paginated ) {
+			$meta              = is_array( $response['data'] ) && isset( $response['data']['meta'] ) ? (array) $response['data']['meta'] : array();
+			$payload['active'] = (int) ( $meta['selected_urls_count'] ?? $active );
+			$payload['total']  = (int) ( $meta['total'] ?? count( $clean ) );
+			$payload['meta']   = array(
+				'current_page' => (int) ( $meta['current_page'] ?? 1 ),
+				'last_page'    => (int) ( $meta['last_page'] ?? 1 ),
+				'per_page'     => self::URL_PAGE_SIZE,
+			);
+		}
+
+		wp_send_json_success( $payload );
 	}
 
 	/**
@@ -243,6 +299,109 @@ class WCD_MainWP_Ajax {
 			array(
 				'desktop' => $desktop,
 				'mobile'  => $mobile,
+			)
+		);
+	}
+
+	/**
+	 * Collect ALL URL ids of a group (paginated id-fetch loop). Sends a JSON error itself when the
+	 * API fails: at that point nothing has been written yet.
+	 *
+	 * @param string $group_id The WCD group uuid.
+	 * @return array
+	 */
+	protected static function all_group_url_ids( string $group_id ): array {
+		$ids = array();
+		for ( $page = 1; $page <= self::SELECT_ALL_MAX_PAGES; $page++ ) {
+			$response = WCD_MainWP_API::get_group_urls(
+				$group_id,
+				self::token(),
+				array(
+					'page'     => $page,
+					'per_page' => self::SELECT_ALL_PER_PAGE,
+				)
+			);
+			if ( ! $response['ok'] ) {
+				wp_send_json_error( array( 'message' => $response['error'] ) );
+			}
+
+			$urls = WCD_MainWP_Update_Flow::extract_urls( $response['data'] );
+			foreach ( $urls as $url ) {
+				if ( ! empty( $url['id'] ) ) {
+					$ids[] = (string) $url['id'];
+				}
+			}
+
+			$meta = is_array( $response['data'] ) && isset( $response['data']['meta'] ) ? (array) $response['data']['meta'] : array();
+			if ( count( $urls ) < self::SELECT_ALL_PER_PAGE || $page >= (int) ( $meta['last_page'] ?? PHP_INT_MAX ) ) {
+				return $ids;
+			}
+		}
+
+		// The cap was hit with pages still left: writing a truncated selection would be silent
+		// partial state, so refuse instead.
+		wp_send_json_error( array( 'message' => __( 'This site has too many URLs to select all at once.', 'webchangedetector-for-mainwp' ) ) );
+
+		return array();
+	}
+
+	/**
+	 * Enable or disable one viewport (desktop|mobile) for ALL URLs of a site's group.
+	 *
+	 * The payload carries only the toggled device key per URL, so the other viewport stays
+	 * untouched. Chunked bulk PUTs; a mid-chunk failure reports the partial progress (re-running
+	 * select-all is the idempotent retry).
+	 *
+	 * @return void
+	 */
+	public static function update_all_urls(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$site_id  = self::site_id();
+		$device   = isset( $_POST['device'] ) ? sanitize_text_field( wp_unslash( $_POST['device'] ) ) : '';
+		$enabled  = ! empty( $_POST['enabled'] ) && 'false' !== $_POST['enabled'];
+		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+
+		if ( '' === $group_id || ! in_array( $device, array( 'desktop', 'mobile' ), true ) ) {
+			wp_send_json_error( array( 'message' => __( 'Missing group or device.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$payload = array();
+		foreach ( self::all_group_url_ids( $group_id ) as $url_id ) {
+			$payload[] = array(
+				'id'    => $url_id,
+				$device => $enabled,
+			);
+		}
+		if ( ! $payload ) {
+			wp_send_json_success( array( 'updated' => 0 ) );
+		}
+
+		$updated = 0;
+		$counts  = array();
+		foreach ( array_chunk( $payload, self::SELECT_ALL_PUT_CHUNK ) as $chunk ) {
+			$response = WCD_MainWP_API::update_urls_in_group( $group_id, $chunk, self::token() );
+			if ( ! $response['ok'] ) {
+				wp_send_json_error(
+					array(
+						'message' => sprintf(
+							/* translators: 1: updated URL count, 2: total URL count, 3: error message. */
+							__( 'Stopped after updating %1$d of %2$d URLs: %3$s', 'webchangedetector-for-mainwp' ),
+							$updated,
+							count( $payload ),
+							$response['error']
+						),
+					)
+				);
+			}
+			$updated += count( $chunk );
+			$counts   = is_array( $response['data'] ) ? $response['data'] : array();
+		}
+
+		wp_send_json_success(
+			array(
+				'updated' => $updated,
+				'active'  => (int) ( $counts['selected_urls_count'] ?? 0 ),
+				'checks'  => (int) ( $counts['selected_checks_count'] ?? 0 ),
 			)
 		);
 	}
@@ -469,6 +628,13 @@ class WCD_MainWP_Ajax {
 			$groups[ $site_id ] = $group_id;
 		}
 
+		// Purge the child caches before the PRE screenshots so pre and post both show freshly
+		// generated pages (a stale cached pre would diff against a fresh post and produce false
+		// positives). Synchronous and best effort; the POST purge happens after run_update.
+		if ( 'pre' === $sc_type ) {
+			WCD_MainWP_Cache_Purge::purge_sites( array_keys( $groups ) );
+		}
+
 		$result = self::take_batches_for_sites( $groups, $sc_type );
 
 		// Track the run's progress server-side so an interrupted run can be resumed (no-ops when
@@ -569,6 +735,20 @@ class WCD_MainWP_Ajax {
 	public static function run_update(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
 		$site_id = self::site_id();
+
+		// Only trigger updates for sites that are enabled for visual checks (same gate the
+		// screenshot handlers apply). Without this a crafted id could update a non-enabled site,
+		// which would then have no pre screenshot to compare against.
+		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+			wp_send_json_error(
+				array(
+					/* translators: %d: MainWP site id. */
+					'message' => sprintf( __( 'Site %d is not enabled for visual checks.', 'webchangedetector-for-mainwp' ), $site_id ),
+					'offline' => false,
+				)
+			);
+		}
+
 		// Keep the tracked run alive: a single site's synchronous update can take minutes with no
 		// polling in between, and must not make the run look abandoned to another tab.
 		WCD_MainWP_Update_Flow::touch_run();
@@ -584,8 +764,17 @@ class WCD_MainWP_Ajax {
 		}
 
 		// The site's updates ran; its post screenshots are now due (resume picks this up if the
-		// browser disappears before take_post).
+		// browser disappears before take_post). Recorded BEFORE the purge: if the purge request
+		// stalls and the PHP request dies, the resume path must still know about this site (it
+		// re-purges anyway).
 		WCD_MainWP_Update_Flow::record_site_updated( $site_id );
+
+		// Updates installed: purge the child's cache now so the post screenshots (dispatched by
+		// the card's later take_post call) capture the updated site instead of a cached old
+		// version. Skipped when nothing was updated (the cache cannot be stale then).
+		if ( $result['updated'] > 0 ) {
+			WCD_MainWP_Cache_Purge::purge_site( $site_id );
+		}
 
 		wp_send_json_success(
 			array(
@@ -950,6 +1139,11 @@ class WCD_MainWP_Ajax {
 		}
 
 		if ( ! empty( $need ) ) {
+			// Belt and braces: run_update already purged after installing, but that purge is best
+			// effort and the updates ran a while ago (a resume is only offered after the staleness
+			// gate). Re-purge so the late post screenshots never capture a stale cache.
+			WCD_MainWP_Cache_Purge::purge_sites( array_keys( $need ) );
+
 			// One chunked batch-per-group call for all missing sites instead of one take call each.
 			$result = self::take_batches_for_sites( $need, 'post' );
 			foreach ( $result['batches'] as $site_id => $batch ) {
