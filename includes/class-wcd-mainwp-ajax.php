@@ -264,6 +264,23 @@ class WCD_MainWP_Ajax {
 			$ids = self::scope_site_ids();
 		}
 
+		// The run only covers sites with pending updates, so the banner's Pages/Checks reflect the
+		// same set. A null map (MainWP DB layer unavailable) fails open: no filtering. A missing
+		// key (site row unresolvable) fails closed, matching the preflight: MainWP cannot update
+		// that site anyway.
+		$scope_count = count( $ids );
+		$by_site     = WCD_MainWP_Update_Flow::pending_updates_by_site( $ids );
+		if ( is_array( $by_site ) ) {
+			$ids = array_values(
+				array_filter(
+					$ids,
+					static function ( $sid ) use ( $by_site ) {
+						return isset( $by_site[ (int) $sid ] ) && $by_site[ (int) $sid ] > 0;
+					}
+				)
+			);
+		}
+
 		$token  = self::token();
 		$pages  = 0;
 		$checks = 0;
@@ -287,9 +304,11 @@ class WCD_MainWP_Ajax {
 
 		wp_send_json_success(
 			array(
-				'sites'  => count( $ids ),
-				'pages'  => $pages,
-				'checks' => $checks,
+				// `sites` keeps its original meaning (scope size); the filtered count is additive.
+				'sites'          => $scope_count,
+				'eligible_sites' => count( $ids ),
+				'pages'          => $pages,
+				'checks'         => $checks,
 			)
 		);
 	}
@@ -311,38 +330,57 @@ class WCD_MainWP_Ajax {
 		$pages         = 0;
 		$total_updates = 0;
 		$managed       = WCD_MainWP_Site_Map::managed_sites();
+		// When MainWP's DB layer is unavailable the per-site update info is unknown; every site
+		// then counts as eligible (fail open to the unfiltered run) instead of being skipped.
+		$counts_known = WCD_MainWP_Update_Flow::updates_info_available();
 		foreach ( $scope as $site_id ) {
 			$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
 			if ( '' === $group_id ) {
 				continue;
 			}
 
-			// Meta-only fetch (same as banner_stats): the API aggregates the SELECTED counts
-			// group-wide in `meta`, so per_page=1 keeps the payload tiny. The actual URL list
-			// lazy-loads in the preflight when a site row is expanded (get_site_urls).
-			$response    = WCD_MainWP_API::get_group_urls( $group_id, $token, array( 'per_page' => 1 ) );
-			$meta        = ( $response['ok'] && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
-			$site_pages  = (int) ( $meta['selected_urls_count'] ?? 0 );
-			$site_checks = (int) ( $meta['selected_checks_count'] ?? 0 );
+			$items       = WCD_MainWP_Update_Flow::update_items_for_site( $site_id );
+			$has_updates = ! $counts_known || count( $items ) > 0;
 
-			$items          = WCD_MainWP_Update_Flow::update_items_for_site( $site_id );
-			$sites[]        = array(
-				'site_id'    => $site_id,
-				'name'       => $managed[ $site_id ]['name'] ?? '',
-				'host'       => $managed[ $site_id ]['domain'] ?? '',
-				'checks'     => $site_checks,
-				'pages'      => $site_pages,
+			$site_pages  = 0;
+			$site_checks = 0;
+			$meta_error  = false;
+			if ( $has_updates ) {
+				// Meta-only fetch (same as banner_stats): the API aggregates the SELECTED counts
+				// group-wide in `meta`, so per_page=1 keeps the payload tiny. The actual URL list
+				// lazy-loads in the preflight when a site row is expanded (get_site_urls). Sites
+				// without pending updates skip the fetch: they are not part of the run.
+				$response    = WCD_MainWP_API::get_group_urls( $group_id, $token, array( 'per_page' => 1 ) );
+				$meta        = ( $response['ok'] && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
+				$site_pages  = (int) ( $meta['selected_urls_count'] ?? 0 );
+				$site_checks = (int) ( $meta['selected_checks_count'] ?? 0 );
 				// A failed meta fetch degrades to 0 checks; flag it so the preflight can warn
 				// instead of silently updating the site without its visual safety net.
-				'meta_error' => ! $response['ok'],
-				'updates'    => array(
+				$meta_error = ! $response['ok'];
+			}
+
+			$sites[] = array(
+				'site_id'     => $site_id,
+				'name'        => $managed[ $site_id ]['name'] ?? '',
+				'host'        => $managed[ $site_id ]['domain'] ?? '',
+				'checks'      => $site_checks,
+				'pages'       => $site_pages,
+				'meta_error'  => $meta_error,
+				// Only sites with pending updates participate in the run; the popup shows the
+				// others greyed out. Additive field (backward compatible).
+				'has_updates' => $has_updates,
+				'updates'     => array(
 					'total' => count( $items ),
 					'items' => $items,
 				),
 			);
-			$checks        += $site_checks;
-			$pages         += $site_pages;
-			$total_updates += count( $items );
+
+			// Aggregates (and therefore the credit math) only cover the sites that will run.
+			if ( $has_updates ) {
+				$checks        += $site_checks;
+				$pages         += $site_pages;
+				$total_updates += count( $items );
+			}
 		}
 
 		$account      = WCD_MainWP_Site_Settings::get_account();

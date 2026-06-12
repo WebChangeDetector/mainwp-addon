@@ -128,6 +128,22 @@ flow from our own button because no hook can trigger updates and the before-upda
 async screenshots. The banner's Pages/Checks load progressively via the `banner_stats` AJAX so the
 dashboard never blocks on WCD API calls.
 
+**The run only covers sites with pending updates.** The `preflight` AJAX flags every scope site
+with `has_updates` (additive field; read from MainWP's own DB upgrade columns) and computes ALL
+aggregates (pages, checks, screenshots, credit math) over the eligible sites only; ineligible
+sites skip the group-urls meta fetch entirely. The JS builds the run set from the flag, so
+pre/post screenshots and the update trigger never touch a site without updates (no wasted check
+credits). Sites without updates still appear in the preflight, greyed out with a "No updates"
+badge. Failure semantics: when MainWP's DB layer is unavailable
+(`WCD_MainWP_Update_Flow::updates_info_available()` is false) the update info is unknown and every
+site counts as eligible (fail open: exactly the old unfiltered behavior); a site whose MainWP
+website row cannot be resolved counts as "no updates" (fail closed: MainWP cannot update it
+either). The same filter drives the numbers: the hero banner's Sites stat shows **"X / Y" +
+"Sites with updates"** (plain total + "Site(s)" when unknown) and `banner_stats` aggregates
+Pages/Checks over the eligible sites only. `pending_updates_by_site()` is the per-site source for
+the banner + `banner_stats`; `pending_updates_count()` derives its total from it; `preflight()`
+reads the same upgrade columns via `update_items_for_site()` (it needs the item list anyway).
+
 Because the entry point is already "Run visual check & update", there is no with/without choice: the
 button opens the **preflight popup, which is confirm-only**. The preflight renders the full run
 overview from the enriched `preflight` AJAX payload: a Sites / Pages / Screenshots / Checks summary
@@ -150,7 +166,9 @@ the scheduler and orchestrates the phases as **barriers** so every site advances
    tolerated; "nothing to update" is success-no-post.
 3. **POST**: ONE `take_post` call with all sites -> poll aggregated -> `get comparisons` per batch.
 
-`take_pre`/`take_post` accept `site_ids[]` (single `site_id` still supported) and start everything
+`take_pre`/`take_post` accept `site_ids[]` (single `site_id` still supported) and deliberately do
+NOT re-apply the pending-updates filter (stale MainWP sync data must never block an explicit run;
+the resume + re-check paths reuse these endpoints). They start everything
 server-side via **chunked batch-per-group take calls** (`TAKE_CHUNK` = 10 sites per API call, like
 the webapp's bulk on-demand start): one API call creates one batch per group and returns the
 group->batch map, instead of one take call per site. Fallbacks per chunk: an older API that ignores

@@ -96,7 +96,8 @@
 .wcd-hero__desc { margin-top: 5px; font-size: 13.5px; line-height: 1.45; color: rgba(255, 255, 255, .72); max-width: 64ch; }
 .wcd-hero__stats { display: flex; gap: 28px; }
 .wcd-hero__stat { text-align: center; }
-.wcd-hero__num { font-size: 26px; font-weight: 700; line-height: 1; color: #fff; }
+/* nowrap: the Sites stat can render a split like "5 / 12". */
+.wcd-hero__num { font-size: 26px; font-weight: 700; line-height: 1; color: #fff; white-space: nowrap; }
 .wcd-hero__lbl { margin-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: rgba(255, 255, 255, .6); }
 .wcd-hero__cta {
     flex-shrink: 0; cursor: pointer; border: 0; border-radius: 9px; padding: 13px 22px;
@@ -160,6 +161,9 @@
     background: transparent; border: 0; cursor: pointer; color: inherit; text-align: left;
 }
 .wcd-pf-urlchev { margin-left: auto; opacity: .6; }
+/* Skipped site (no pending updates): a static div, greyed, badge pushed to the chevron column. */
+.wcd-pf-urlshead.is-skipped { cursor: default; opacity: .55; }
+.wcd-pf-urlshead.is-skipped .wcd-pf-urlcount { margin-left: auto; background: transparent; border: 1px solid rgba(128, 128, 128, .35); }
 .wcd-pf-urlbody { padding: 0 0 10px 34px; }
 .wcd-pf-urlname { font-size: 13.5px; font-weight: 600; }
 .wcd-pf-urlcount { padding: 1px 8px; border-radius: 999px; background: rgba(128, 128, 128, .12); font-size: 11px; color: var(--wcd-muted); }

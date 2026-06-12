@@ -10,12 +10,13 @@
  * Sites + the pending-update count are rendered server-side (cheap). Pages/Checks load progressively
  * via the `banner_stats` AJAX call so the dashboard never blocks on WCD API calls.
  *
- * @var string   $scope         'bulk' (all enabled sites) or 'site' (one site).
- * @var int      $site_id       Site id when scope is 'site' (0 otherwise).
- * @var int      $sites_count   Number of sites in scope.
- * @var int|null $updates_count Pending MainWP updates in scope (null when unknown).
- * @var bool     $force_enabled Keep the CTA enabled even when $updates_count is 0 (caller knows
- *                              updates exist, e.g. the Updates-page entry point). Optional.
+ * @var string   $scope               'bulk' (all enabled sites) or 'site' (one site).
+ * @var int      $site_id             Site id when scope is 'site' (0 otherwise).
+ * @var int      $sites_count         Number of sites in scope.
+ * @var int|null $updates_count       Pending MainWP updates in scope (null when unknown).
+ * @var int|null $updates_sites_count Sites in scope with pending updates (null when unknown).
+ * @var bool     $force_enabled       Keep the CTA enabled even when $updates_count is 0 (caller
+ *                                    knows updates exist, e.g. the Updates-page entry point). Optional.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -50,8 +51,15 @@ if ( null !== $updates_count && $updates_count > 0 ) {
 	</div>
 	<div class="wcd-hero__stats">
 		<div class="wcd-hero__stat">
-			<div class="wcd-hero__num"><?php echo esc_html( (string) $sites_count ); ?></div>
-			<div class="wcd-hero__lbl"><?php echo esc_html( _n( 'Site', 'Sites', $sites_count, 'webchangedetector-for-mainwp' ) ); ?></div>
+			<?php if ( null !== $updates_sites_count ) : ?>
+				<?php // Only sites with pending updates participate in a run, so the stat shows the split. ?>
+				<div class="wcd-hero__num"><?php echo esc_html( $updates_sites_count . ' / ' . $sites_count ); ?></div>
+				<div class="wcd-hero__lbl"><?php esc_html_e( 'Sites with updates', 'webchangedetector-for-mainwp' ); ?></div>
+			<?php else : ?>
+				<?php // Update info unknown (MainWP DB layer unavailable): plain total, no split. ?>
+				<div class="wcd-hero__num"><?php echo esc_html( (string) $sites_count ); ?></div>
+				<div class="wcd-hero__lbl"><?php echo esc_html( _n( 'Site', 'Sites', $sites_count, 'webchangedetector-for-mainwp' ) ); ?></div>
+			<?php endif; ?>
 		</div>
 		<div class="wcd-hero__stat">
 			<div class="wcd-hero__num" data-role="pages">&hellip;</div>

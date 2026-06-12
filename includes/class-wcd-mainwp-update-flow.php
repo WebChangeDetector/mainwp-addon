@@ -211,43 +211,55 @@ class WCD_MainWP_Update_Flow {
 	/* ─────────────────────────── Pending updates ───────────────────────── */
 
 	/**
-	 * Best-effort count of pending MainWP updates across the given sites, read from MainWP's own
-	 * per-site upgrade columns. Used only for the banner copy ("install the N pending updates"), so
-	 * it is approximate (it does not subtract ignored/dismissed updates) and degrades to null when
-	 * MainWP's DB layer is unavailable, in which case the banner drops the number.
+	 * Whether MainWP's DB layer is available for reading the per-site upgrade columns. Callers use
+	 * this to distinguish "no pending updates" from "update info unknown" (both yield empty lists).
+	 */
+	public static function updates_info_available(): bool {
+		$db = '\\MainWP\\Dashboard\\MainWP_DB';
+
+		return class_exists( $db ) && method_exists( $db, 'instance' );
+	}
+
+	/**
+	 * Best-effort per-site count of pending MainWP updates, read from MainWP's own upgrade columns.
+	 * Approximate (it does not subtract ignored/dismissed updates). Null is reserved strictly for
+	 * "MainWP's DB layer is unavailable" (info unknown, callers fail open). Sites whose website row
+	 * cannot be resolved get no key: MainWP cannot update such a site either, so callers treat a
+	 * missing key as "no updates" (fail closed).
 	 *
 	 * @param array $site_ids MainWP site ids to count updates for.
-	 * @return int|null Total pending updates, or null when MainWP's DB layer is unavailable.
+	 * @return array|null Map of site id => pending update count, or null when unavailable.
 	 */
-	public static function pending_updates_count( array $site_ids ): ?int {
-		$db = '\\MainWP\\Dashboard\\MainWP_DB';
-		if ( ! class_exists( $db ) || ! method_exists( $db, 'instance' ) ) {
+	public static function pending_updates_by_site( array $site_ids ): ?array {
+		if ( ! self::updates_info_available() ) {
 			return null;
 		}
 
-		$total = 0;
-		$known = false;
+		$db      = '\\MainWP\\Dashboard\\MainWP_DB';
+		$by_site = array();
 		foreach ( $site_ids as $site_id ) {
 			$website = $db::instance()->get_website_by_id( (int) $site_id );
 			if ( empty( $website ) ) {
 				continue;
 			}
-			$known  = true;
-			$total += self::count_site_upgrades( $website );
+			$by_site[ (int) $site_id ] = count( self::items_from_website( $website ) );
 		}
 
-		return $known ? $total : null;
+		return $by_site;
 	}
 
 	/**
-	 * Count one site's pending updates: WordPress core (0/1) + plugins + themes + translations.
-	 * Derived from the parsed item list so the count and the preflight "what gets updated" list
-	 * always agree.
+	 * Best-effort total of pending MainWP updates across the given sites. Used for the banner copy
+	 * ("install the N pending updates"); null when MainWP's DB layer is unavailable, in which case
+	 * the banner drops the number.
 	 *
-	 * @param object $website MainWP website row.
+	 * @param array $site_ids MainWP site ids to count updates for.
+	 * @return int|null Total pending updates, or null when MainWP's DB layer is unavailable.
 	 */
-	protected static function count_site_upgrades( $website ): int {
-		return count( self::items_from_website( $website ) );
+	public static function pending_updates_count( array $site_ids ): ?int {
+		$by_site = self::pending_updates_by_site( $site_ids );
+
+		return null === $by_site ? null : array_sum( $by_site );
 	}
 
 	/**
@@ -259,11 +271,11 @@ class WCD_MainWP_Update_Flow {
 	 * @return array List of update item arrays (kind, name, version).
 	 */
 	public static function update_items_for_site( int $site_id ): array {
-		$db = '\\MainWP\\Dashboard\\MainWP_DB';
-		if ( ! class_exists( $db ) || ! method_exists( $db, 'instance' ) ) {
+		if ( ! self::updates_info_available() ) {
 			return array();
 		}
 
+		$db      = '\\MainWP\\Dashboard\\MainWP_DB';
 		$website = $db::instance()->get_website_by_id( $site_id );
 
 		return empty( $website ) ? array() : self::items_from_website( $website );

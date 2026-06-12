@@ -323,13 +323,20 @@
 
         api('preflight', preflightArgs(scope, siteId)).then(function (data) {
             body.innerHTML = '';
-            var sites      = data.sites || [];
-            var checkSites = sites.filter(function (s) { return s.checks > 0; });
+            var sites = data.sites || [];
+            // Only sites with pending updates participate in the run; a missing flag (older
+            // server response) fails open so the site is still included.
+            var runSites   = sites.filter(function (s) { return false !== s.has_updates; });
+            var checkSites = runSites.filter(function (s) { return s.checks > 0; });
+            if (sites.length && !runSites.length) {
+                body.appendChild(el('p', { class: 'wcd-muted', text: t('noEligibleUpdates') }));
+                return;
+            }
             if (!checkSites.length) {
                 body.appendChild(el('p', { class: 'wcd-muted', text: t('noSites') }));
                 return;
             }
-            buildPreflight(modal, body, data, checkSites, sites, host, trigger);
+            buildPreflight(modal, body, data, checkSites, runSites, sites, host, trigger);
         }).catch(function (e) {
             body.innerHTML = '';
             body.appendChild(el('p', { class: 'wcd-error', text: e.message }));
@@ -347,12 +354,16 @@
 
     /* ─── Preflight content (summary · credits · updates · per-site URLs) ── */
 
-    function buildPreflight(modal, body, data, checkSites, allSites, host, trigger) {
+    // runSites = sites with pending updates (the run set); allSites additionally holds the
+    // skipped sites without updates, rendered greyed out for transparency (display only).
+    function buildPreflight(modal, body, data, checkSites, runSites, allSites, host, trigger) {
         body.appendChild(el('p', { class: 'wcd-pf-lead', text: t('preflightLead') }));
 
         // summary strip
         var strip = el('div', { class: 'wcd-pf-summary' });
-        [[t('sites'), checkSites.length], [t('pages'), data.pages], [t('screenshots'), data.screenshots], [t('checks'), data.checks]].forEach(function (pair, i) {
+        // Sites = the run set (matches the confirm button); the "unchecked" note below explains
+        // run sites that stay live without screenshots.
+        [[t('sites'), runSites.length], [t('pages'), data.pages], [t('screenshots'), data.screenshots], [t('checks'), data.checks]].forEach(function (pair, i) {
             strip.appendChild(el('div', { class: 'wcd-pf-stat' + (3 === i ? ' is-accent' : '') }, [
                 el('div', { class: 'wcd-pf-statnum', text: String(pair[1]) }),
                 el('div', { class: 'wcd-pf-statlbl', text: pair[0] })
@@ -420,11 +431,22 @@
         checkSites.forEach(function (s) {
             list.appendChild(buildPreflightSite(s));
         });
+        // Skipped sites (no pending updates): static greyed rows without accordion behavior;
+        // they are not part of the run, the badge explains why.
+        allSites.filter(function (s) { return false === s.has_updates; }).forEach(function (s) {
+            list.appendChild(el('div', { class: 'wcd-pf-site' }, [
+                el('div', { class: 'wcd-pf-urlshead is-skipped' }, [
+                    el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
+                    el('span', { class: 'wcd-pf-urlname', text: s.name }),
+                    el('span', { class: 'wcd-pf-urlcount', text: t('noUpdatesBadge') })
+                ])
+            ]));
+        });
         body.appendChild(list);
 
         // Sites whose check counts could not be loaded (API hiccup): they would be updated
         // WITHOUT visual checks, so say it loudly instead of hiding them among the unchecked.
-        var metaErrors = allSites.filter(function (s) { return s.meta_error; }).length;
+        var metaErrors = runSites.filter(function (s) { return s.meta_error; }).length;
         if (metaErrors > 0) {
             body.appendChild(el('p', { class: 'wcd-error wcd-pf-note' }, [
                 el('i', { class: 'exclamation triangle icon' }),
@@ -432,8 +454,8 @@
             ]));
         }
 
-        // unchecked note
-        var unchecked = allSites.length - checkSites.length;
+        // unchecked note (run sites that stay live without screenshots)
+        var unchecked = runSites.length - checkSites.length;
         if (unchecked > 0) {
             body.appendChild(el('p', { class: 'wcd-muted wcd-pf-note' }, [
                 el('i', { class: 'info circle icon' }),
@@ -452,10 +474,10 @@
         }
         var confirm = el('button', { class: 'ui blue button', type: 'button' }, [
             el('i', { class: 'play icon' }),
-            document.createTextNode(t('confirmRun') + ' ' + allSites.length + ' ' + plural(allSites.length, t('site'), t('sitesPlural')))
+            document.createTextNode(t('confirmRun') + ' ' + runSites.length + ' ' + plural(runSites.length, t('site'), t('sitesPlural')))
         ]);
         confirm.disabled = !enough;
-        confirm.addEventListener('click', function () { closeModal(); startRun(host, trigger, allSites); });
+        confirm.addEventListener('click', function () { closeModal(); startRun(host, trigger, runSites); });
         foot.appendChild(confirm);
         modal.appendChild(foot);
     }
