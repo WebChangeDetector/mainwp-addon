@@ -402,8 +402,8 @@ class WCD_MainWP_Bootstrap {
 			'selectAll'         => __( 'Select all:', 'webchangedetector-for-mainwp' ),
 			'prev'              => __( 'Prev', 'webchangedetector-for-mainwp' ),
 			'next'              => __( 'Next', 'webchangedetector-for-mainwp' ),
-			/* translators: %1$s current page, %2$s last page, %3$s total URL count. */
-			'pageOf'            => __( 'Page %1$s of %2$s · %3$s URLs', 'webchangedetector-for-mainwp' ),
+			/* translators: %s: total URL count. */
+			'urlsTotal'         => __( '%s URLs', 'webchangedetector-for-mainwp' ),
 			'noResults'         => __( 'No URLs match your search.', 'webchangedetector-for-mainwp' ),
 			/* translators: %s: device name (Desktop or Mobile). */
 			'confirmDisableAll' => __( 'Disable all %s checks for this site?', 'webchangedetector-for-mainwp' ),

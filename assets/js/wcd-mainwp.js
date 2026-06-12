@@ -283,23 +283,48 @@
         });
     }
 
+    // Numbered pages with ellipsis gaps (webapp parity): 1 … c-2 c-1 [c] c+1 c+2 … last.
+    // A gap of exactly one page shows that page instead of an ellipsis.
+    function urlPageItems(current, last) {
+        var items = [];
+        var prev = 0;
+        for (var p = 1; p <= last; p++) {
+            if (1 !== p && last !== p && Math.abs(p - current) > 2) { continue; }
+            if (p - prev === 2) { items.push(p - 1); }
+            else if (p - prev > 2) { items.push('…'); }
+            items.push(p);
+            prev = p;
+        }
+        return items;
+    }
+
     function renderUrlPager(card, data) {
         var pager = card.querySelector('[data-role="urlpager"]');
         pager.innerHTML = '';
         var meta = data.meta || {};
+        var current = meta.current_page || 1;
         var lastPage = meta.last_page || 1;
         if (lastPage <= 1) { return; }
-        var prev = el('button', { type: 'button', class: 'ui mini basic button', text: t('prev') });
-        var next = el('button', { type: 'button', class: 'ui mini basic button', text: t('next') });
-        prev.disabled = meta.current_page <= 1;
-        next.disabled = meta.current_page >= lastPage;
-        prev.addEventListener('click', function () { gotoUrlPage(card, meta.current_page - 1); });
-        next.addEventListener('click', function () { gotoUrlPage(card, meta.current_page + 1); });
-        pager.appendChild(prev);
-        pager.appendChild(next);
+
+        function pageButton(label, page, isCurrent, isDisabled) {
+            var btn = el('button', { type: 'button', class: 'ui mini basic button' + (isCurrent ? ' active' : ''), text: label });
+            btn.disabled = isCurrent || isDisabled;
+            btn.addEventListener('click', function () { gotoUrlPage(card, page); });
+            return btn;
+        }
+
+        pager.appendChild(pageButton(t('prev'), current - 1, false, current <= 1));
+        urlPageItems(current, lastPage).forEach(function (p) {
+            if ('…' === p) {
+                pager.appendChild(el('span', { class: 'wcd-url-pagegap', text: '…' }));
+                return;
+            }
+            pager.appendChild(pageButton(String(p), p, p === current, false));
+        });
+        pager.appendChild(pageButton(t('next'), current + 1, false, current >= lastPage));
         pager.appendChild(el('span', {
             class: 'wcd-url-pageinfo',
-            text: fmt(t('pageOf'), { '%1$s': meta.current_page, '%2$s': lastPage, '%3$s': data.total })
+            text: fmt(t('urlsTotal'), { '%s': data.total })
         }));
     }
 
