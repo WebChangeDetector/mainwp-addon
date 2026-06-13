@@ -227,9 +227,17 @@ class WCD_MainWP_Site_Settings {
 			wp_die( esc_html__( 'Insufficient permissions.', 'webchangedetector-for-mainwp' ) );
 		}
 
-		$token = isset( $_POST[ self::OPTION_KEY ] ) ? sanitize_text_field( wp_unslash( $_POST[ self::OPTION_KEY ] ) ) : '';
+		$old_token = self::get_global();
+		$token     = isset( $_POST[ self::OPTION_KEY ] ) ? sanitize_text_field( wp_unslash( $_POST[ self::OPTION_KEY ] ) ) : '';
 		WCD_MainWP_Options::set( self::OPTION_KEY, $token );
 		WCD_MainWP_Options::delete_transient( self::ACCOUNT_CACHE );
+
+		// A changed token points the add-on at a different WebChange Detector account. The stored
+		// website/group UUIDs belong to the previous account and would 404 on every group call, so
+		// forget all provisioning: sites must be re-enabled (re-provisioned) under the new token.
+		if ( '' !== $old_token && $old_token !== $token ) {
+			WCD_MainWP_Site_Map::reset_all();
+		}
 
 		// Auto-enable toggle (checkbox: absent in POST means unchecked = off).
 		WCD_MainWP_Options::set( self::AUTO_ENABLE_KEY, isset( $_POST[ self::AUTO_ENABLE_KEY ] ) ? '1' : '0' );

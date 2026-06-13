@@ -41,7 +41,10 @@
             return res.json().catch(function () { return { success: false, data: { message: t('genericError') } }; });
         }).then(function (json) {
             if (!json || !json.success) {
-                throw new Error((json && json.data && json.data.message) || t('genericError'));
+                var err = new Error((json && json.data && json.data.message) || t('genericError'));
+                // Keep the structured payload (e.g. the `unlinked` flag) on the error for callers.
+                err.data = (json && json.data) ? json.data : {};
+                throw err;
             }
             return json.data;
         });
@@ -79,6 +82,7 @@
     var closeIconNode = null;   // the original Fomantic-bound close icon, kept across content swaps
     var fallbackDimmer = null;  // only used when Fomantic's modal plugin is unavailable
     var activeRun = false;      // true while a safe-update pipeline is in flight (drives close guard)
+    var syncInFlight = 0;       // count of in-flight site activations (drives the leave-page guard)
 
     function hasModalPlugin() {
         return !!(window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.modal === 'function');
@@ -175,32 +179,79 @@
     function cardOf(node) { return node.closest('.wcd-site'); }
     function siteIdOf(card) { return parseInt(card.getAttribute('data-site-id'), 10); }
 
+    // Reflect an enable/disable response in the card's DOM (toggle state, row buttons, URL count).
+    // Returns a promise that resolves once any queued URL sync has been polled in, so bulk callers
+    // can await the full sync before advancing to the next site.
+    function applyEnabledState(card, enabled, data) {
+        card.classList.toggle('wcd-on', enabled);
+        var toggle = card.querySelector('.wcd-site-toggle');
+        if (toggle) { toggle.checked = enabled; }
+        card.querySelectorAll('.wcd-configure-urls').forEach(function (b) { b.disabled = !enabled; });
+        var count = card.querySelector('[data-role="urlcount"]');
+        if (enabled) {
+            if (data && data.synced) {
+                // URLs were sent to sync (queued); poll until they appear, then render.
+                return pollUrls(card, 0);
+            }
+            if (count) { count.textContent = (data && data.sync_message) ? data.sync_message : ''; }
+            return Promise.resolve();
+        }
+        if (count) { count.textContent = (S.disabled || 'Inactive'); }
+        var cfgBox = card.querySelector('[data-role="urlconfig"]');
+        if (cfgBox) { cfgBox.hidden = true; cfgBox.innerHTML = ''; }
+        return Promise.resolve();
+    }
+
+    // Server self-heal: a 404 group call means this site's stored mapping is stale (e.g. after an
+    // API token switch). The server already forgot its provisioning, so reflect the disabled state in
+    // the row and tell the user to re-sync. Returns true when it handled the error.
+    function handleUnlinked(card, e) {
+        if (card && e && e.data && e.data.unlinked) {
+            applyEnabledState(card, false);
+            window.alert(e.message);
+            return true;
+        }
+        return false;
+    }
+
+    // Swap the card's URL-count cell to an inline spinner while its activation runs. On success the
+    // count is rendered by applyEnabledState/pollUrls; on failure the caller restores it via on=false.
+    function setSiteSyncing(card, on) {
+        var count = card.querySelector('[data-role="urlcount"]');
+        if (!count) { return; }
+        count.innerHTML = '';
+        if (on) {
+            count.appendChild(el('div', { class: 'ui active mini inline loader' }));
+        } else {
+            count.textContent = (S.disabled || 'Inactive');
+        }
+    }
+
     function onToggleSite(checkbox) {
         var card = cardOf(checkbox);
         var siteId = siteIdOf(card);
         var enabled = checkbox.checked;
         checkbox.disabled = true;
+        // Enabling activates the site and syncs its URLs in the background: show a spinner and
+        // raise the leave-page guard until the poll settles. Return the promise so .finally waits.
+        if (enabled) { setSiteSyncing(card, true); syncInFlight += 1; }
 
         api('toggle_site', { site_id: siteId, enabled: enabled ? 1 : 0 }).then(function (data) {
-            card.classList.toggle('wcd-on', enabled);
-            card.querySelectorAll('.wcd-sync-urls, .wcd-configure-urls').forEach(function (b) { b.disabled = !enabled; });
-            var count = card.querySelector('[data-role="urlcount"]');
-            if (enabled) {
-                if (data && data.synced) {
-                    // URLs were sent to sync (queued); poll until they appear, then render.
-                    pollUrls(card, 0);
-                } else if (count) {
-                    count.textContent = (data && data.sync_message) ? data.sync_message : '';
-                }
-            } else {
-                if (count) { count.textContent = (S.disabled || 'Disabled'); }
-                var cfgBox = card.querySelector('[data-role="urlconfig"]');
-                if (cfgBox) { cfgBox.hidden = true; cfgBox.innerHTML = ''; }
-            }
+            // toggle_site succeeded: reflect the state and (when enabling) poll URLs in the
+            // background. A later poll failure must NOT revert the toggle — the site is enabled
+            // server-side — so surface it in the count cell instead (same as the bulk path).
+            return applyEnabledState(card, enabled, data).catch(function (e) {
+                var count = card.querySelector('[data-role="urlcount"]');
+                if (count) { count.textContent = e.message; }
+            });
         }).catch(function (e) {
             checkbox.checked = !enabled;
+            if (enabled) { setSiteSyncing(card, false); }
             window.alert(e.message);
-        }).finally(function () { checkbox.disabled = false; });
+        }).finally(function () {
+            checkbox.disabled = false;
+            if (enabled) { syncInFlight -= 1; }
+        });
     }
 
     // Build the URL panel skeleton (toolbar + list + pager) once per open. The toolbar persists
@@ -275,7 +326,10 @@
                     var desktop = vp.querySelectorAll('input')[0].checked;
                     var mobile = vp.querySelectorAll('input')[1].checked;
                     api('update_url', { site_id: siteIdOf(card), url_id: u.id, desktop: desktop ? 1 : 0, mobile: mobile ? 1 : 0 })
-                        .catch(function (e) { input.checked = !input.checked; window.alert(e.message); });
+                        .catch(function (e) {
+                            if (handleUnlinked(card, e)) { return; }
+                            input.checked = !input.checked; window.alert(e.message);
+                        });
                 });
                 vp.appendChild(el('label', {}, [input, document.createTextNode(' ' + t(kind))]));
             });
@@ -398,6 +452,7 @@
         }).then(function (data) {
             renderUrlPanel(card, data);
         }).catch(function (e) {
+            if (handleUnlinked(card, e)) { return; }
             list.innerHTML = '';
             list.appendChild(el('p', { class: 'wcd-error', text: e.message }));
         });
@@ -408,21 +463,6 @@
         var box = card.querySelector('[data-role="urlconfig"]');
         if (!box.hidden) { box.hidden = true; return; }
         loadUrls(card);
-    }
-
-    function onSyncUrls(button) {
-        var card = cardOf(button);
-        var original = button.textContent;
-        button.disabled = true;
-        button.textContent = t('syncing');
-        api('sync_urls', { site_id: siteIdOf(card) }).then(function () {
-            return pollUrls(card, 0);
-        }).catch(function (e) {
-            window.alert(e.message);
-        }).finally(function () {
-            button.disabled = false;
-            button.textContent = original;
-        });
     }
 
     // start-sync is queued server-side; poll the group URLs until they appear.
@@ -437,6 +477,72 @@
                 return;
             }
             return delay(2000).then(function () { return pollUrls(card, tries + 1); });
+        });
+    }
+
+    /* ──────────────────────── Activate all websites ─────────────────────── */
+    // Activating = make a site ready for checks (enable + sync its URLs). The browser drives one
+    // site per request (the same pattern as the safe-update flow), so a large fleet never stacks
+    // slow WCD API calls into a single PHP request, and the user sees live progress.
+
+    function allSiteCards() {
+        return Array.prototype.slice.call(document.querySelectorAll('.wcd-site'));
+    }
+
+    // Render the bulk bar status: an optional spinner (while running) plus a progress message.
+    function setBulkProgress(text, busy) {
+        var node = document.querySelector('[data-role="bulkprogress"]');
+        if (!node) { return; }
+        node.innerHTML = '';
+        if (busy) { node.appendChild(el('div', { class: 'ui active inline loader mini' })); }
+        if (text) { node.appendChild(document.createTextNode(' ' + text)); }
+    }
+
+    // Activate one site: enable it (auto-syncs its URLs) when off, otherwise re-sync its URLs.
+    function activateOneSite(card) {
+        var siteId = siteIdOf(card);
+        if (card.classList.contains('wcd-on')) {
+            return api('sync_urls', { site_id: siteId }).then(function () { return pollUrls(card, 0); });
+        }
+        return api('toggle_site', { site_id: siteId, enabled: 1 }).then(function (data) {
+            return applyEnabledState(card, true, data);
+        });
+    }
+
+    // Sequentially activate a list of cards, locking the controls and reporting progress + failures.
+    function onActivateAll() {
+        var cards = allSiteCards();
+        if (!cards.length) { return; }
+        if (!window.confirm(t('bulkSyncConfirm'))) { return; }
+
+        var total = cards.length;
+        var done = 0;
+        var failed = 0;
+        var controls = document.querySelectorAll('.wcd-activate-all, .wcd-site-toggle');
+        controls.forEach(function (c) { c.disabled = true; });
+        syncInFlight += 1;
+
+        var chain = Promise.resolve();
+        cards.forEach(function (card, i) {
+            chain = chain.then(function () {
+                setBulkProgress(t('bulkSyncProgress').replace('%1$d', i + 1).replace('%2$d', total), true);
+                setSiteSyncing(card, true);
+                return activateOneSite(card).then(function () {
+                    done += 1;
+                }).catch(function (e) {
+                    failed += 1;
+                    var count = card.querySelector('[data-role="urlcount"]');
+                    if (count) { count.textContent = e.message; }
+                });
+            });
+        });
+
+        chain.finally(function () {
+            var msg = t('bulkSyncDone').replace('%1$d', done).replace('%2$d', total);
+            if (failed > 0) { msg += ' ' + t('bulkSyncFailed').replace('%d', failed); }
+            setBulkProgress(msg, false);
+            controls.forEach(function (c) { c.disabled = false; });
+            syncInFlight -= 1;
         });
     }
 
@@ -1157,7 +1263,8 @@
     /* ───────────────────────────── Delegation ──────────────────────────── */
 
     document.addEventListener('change', function (e) {
-        if (e.target.classList && e.target.classList.contains('wcd-site-toggle')) {
+        if (!e.target.classList) { return; }
+        if (e.target.classList.contains('wcd-site-toggle')) {
             onToggleSite(e.target);
         }
     });
@@ -1396,7 +1503,7 @@
     // Warn before leaving the page while a run is in flight: closing the tab can interrupt the
     // pipeline between the update and the post screenshots (unlike merely closing the modal).
     window.addEventListener('beforeunload', function (e) {
-        if (activeRun) {
+        if (activeRun || syncInFlight > 0) {
             e.preventDefault();
             e.returnValue = '';
         }
@@ -1404,11 +1511,11 @@
 
     document.addEventListener('click', function (e) {
         var configure = e.target.closest && e.target.closest('.wcd-configure-urls');
-        var sync = e.target.closest && e.target.closest('.wcd-sync-urls');
         var safe = e.target.closest && e.target.closest('.wcd-safe-update');
+        var activateAll = e.target.closest && e.target.closest('.wcd-activate-all');
 
+        if (activateAll) { e.preventDefault(); if (!activateAll.disabled) { onActivateAll(); } return; }
         if (configure) { e.preventDefault(); onConfigureUrls(configure); return; }
-        if (sync) { e.preventDefault(); onSyncUrls(sync); return; }
         if (safe) {
             e.preventDefault();
             // Disabled trigger (no pending updates): do nothing.

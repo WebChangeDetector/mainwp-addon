@@ -32,6 +32,10 @@ wp-config.php
 # Log files
 *.log
 
+# macOS junk
+.DS_Store
+._*
+
 # Composer dev dependencies (PHPCS / WPCS) — not shipped with the plugin
 /vendor/
 composer.lock

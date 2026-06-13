@@ -18,6 +18,11 @@ class WCD_MainWP_API {
 
 	const DEFAULT_API_URL = 'https://api.webchangedetector.com/api/v2';
 
+	// Owning-integration marker sent to the API so MainWP gets its own website per domain (its ?p=ID
+	// URLs must never mix with the first-party clean permalinks). Sent as managed_by on create and as
+	// the x-wcd-managed-by header on sync; see the API's website_managed_by enum.
+	const MANAGED_BY = 'mainwp';
+
 	/**
 	 * Resolve the API base URL. Supports both override constants (WCD_API_URL and the
 	 * historical WCD_API_URL_V2 used by .wp-env.json). Trailing slash is trimmed.
@@ -265,10 +270,32 @@ class WCD_MainWP_API {
 			'/websites',
 			array(
 				'domain'                    => $domain,
+				'managed_by'                => self::MANAGED_BY,
 				'manual_detection_group_id' => $manual_group_id,
 				'auto_detection_group_id'   => $auto_group_id,
 			),
 			$api_token
+		);
+	}
+
+	/**
+	 * Fetch this account's MainWP-managed website(s) for a domain (managed_by=mainwp). Used to reuse
+	 * an existing website instead of creating a duplicate (e.g. after an API token switch).
+	 *
+	 * @param string $domain    Website domain.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result (data is the paginated website collection).
+	 */
+	public static function get_websites( string $domain, string $api_token = '' ): array {
+		return self::request(
+			'GET',
+			'/websites',
+			array(),
+			$api_token,
+			array(
+				'domain'     => $domain,
+				'managed_by' => self::MANAGED_BY,
+			)
 		);
 	}
 
@@ -283,19 +310,21 @@ class WCD_MainWP_API {
 	 * @return array Normalized API result.
 	 */
 	public static function sync_urls( array $urls, string $domain, string $api_token = '' ): array {
-		return self::request( 'POST', '/sync-urls', array( 'urls' => $urls ), $api_token, array(), array( 'x-wcd-domain' => $domain ) );
+		return self::request( 'POST', '/sync-urls', array( 'urls' => $urls ), $api_token, array(), array( 'x-wcd-domain' => $domain, 'x-wcd-managed-by' => self::MANAGED_BY ) );
 	}
 
 	/**
 	 * Start syncing the uploaded URLs into the live URL set (step 2 of 2). Queued server-side.
 	 *
 	 * @param string $domain              Normalized domain (must match the website's stored domain byte-for-byte).
-	 * @param bool   $delete_missing_urls Whether to delete URLs no longer present in the upload.
+	 * @param bool   $delete_missing_urls Whether to delete URLs no longer present in the upload. Defaults to
+	 *                                    false: we never delete on sync (a partial fetch would otherwise drop
+	 *                                    URLs and their settings), matching the plugin and webapp.
 	 * @param string $api_token           Bearer token; falls back to the stored token.
 	 * @return array Normalized API result.
 	 */
-	public static function start_url_sync( string $domain, bool $delete_missing_urls = true, string $api_token = '' ): array {
-		return self::request( 'POST', '/start-sync', array( 'delete_missing_urls' => $delete_missing_urls ), $api_token, array(), array( 'x-wcd-domain' => $domain ) );
+	public static function start_url_sync( string $domain, bool $delete_missing_urls = false, string $api_token = '' ): array {
+		return self::request( 'POST', '/start-sync', array( 'delete_missing_urls' => $delete_missing_urls ), $api_token, array(), array( 'x-wcd-domain' => $domain, 'x-wcd-managed-by' => self::MANAGED_BY ) );
 	}
 
 	/* ─────────────────────────── Screenshots ───────────────────────────── */

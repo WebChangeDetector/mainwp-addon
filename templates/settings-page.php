@@ -61,7 +61,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 				<input type="checkbox" id="wcd_auto_enable_sites" name="<?php echo esc_attr( WCD_MainWP_Site_Settings::AUTO_ENABLE_KEY ); ?>" value="1" <?php checked( WCD_MainWP_Site_Settings::auto_enable_new_sites() ); ?> />
 				<label for="wcd_auto_enable_sites"><?php esc_html_e( 'Auto-enable new sites', 'webchangedetector-for-mainwp' ); ?></label>
 			</div>
-			<p class="wcd-muted"><?php esc_html_e( 'When you add a site in MainWP, enable it for visual checks and sync its URLs automatically. Each enabled site provisions WebChange Detector resources that count against your plan.', 'webchangedetector-for-mainwp' ); ?></p>
+			<p class="wcd-muted"><?php esc_html_e( 'When you add a site in MainWP, enable it for visual checks and sync its URLs automatically. Websites are unlimited on every plan; only the checks you run count against it.', 'webchangedetector-for-mainwp' ); ?></p>
 		</div>
 		<button type="submit" class="ui primary button"><?php esc_html_e( 'Save & verify', 'webchangedetector-for-mainwp' ); ?></button>
 	</div>
@@ -69,7 +69,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 
 <?php if ( '' === $token ) : ?>
 	<div class="ui info message wcd-mt">
-		<p><?php esc_html_e( 'Add your API token to connect your verified WebChange Detector account.', 'webchangedetector-for-mainwp' ); ?></p>
+		<p><?php echo wp_kses_post( WCD_MainWP_Bootstrap::no_token_hint_html() ); ?></p>
 	</div>
 	<?php return; ?>
 <?php endif; ?>

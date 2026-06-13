@@ -283,7 +283,7 @@ class WCD_MainWP_Runs_View {
 					<th scope="col"><?php esc_html_e( 'Websites', 'webchangedetector-for-mainwp' ); ?></th>
 					<th scope="col"><?php esc_html_e( 'Status', 'webchangedetector-for-mainwp' ); ?></th>
 					<th scope="col" class="collapsing"><?php esc_html_e( 'Created', 'webchangedetector-for-mainwp' ); ?></th>
-					<th scope="col"><?php esc_html_e( 'AI Summary', 'webchangedetector-for-mainwp' ); ?></th>
+					<th scope="col" class="wcd-col-ai"><?php esc_html_e( 'AI Summary', 'webchangedetector-for-mainwp' ); ?></th>
 				</tr>
 			</thead>
 			<?php
@@ -368,7 +368,7 @@ class WCD_MainWP_Runs_View {
 					<th><?php esc_html_e( 'URL', 'webchangedetector-for-mainwp' ); ?></th>
 					<th><?php esc_html_e( 'Compared', 'webchangedetector-for-mainwp' ); ?></th>
 					<th><?php esc_html_e( 'Visual change', 'webchangedetector-for-mainwp' ); ?></th>
-					<th><?php esc_html_e( 'AI summary', 'webchangedetector-for-mainwp' ); ?></th>
+					<th class="wcd-col-ai"><?php esc_html_e( 'AI summary', 'webchangedetector-for-mainwp' ); ?></th>
 					<th></th>
 				</tr>
 			</thead>
@@ -430,7 +430,7 @@ class WCD_MainWP_Runs_View {
 						<span class="ui small text"><?php esc_html_e( 'Processing', 'webchangedetector-for-mainwp' ); ?></span>
 					<?php endif; ?>
 				</td>
-				<td>
+				<td class="wcd-col-ai">
 					<?php if ( $finished_at ) : ?>
 						<span class="ui small text wcd-ai-summary-text"><?php echo esc_html( $ai_summary ? $ai_summary : __( 'AI summary skipped', 'webchangedetector-for-mainwp' ) ); ?></span>
 					<?php endif; ?>
@@ -493,7 +493,7 @@ class WCD_MainWP_Runs_View {
 			<td class="wcd-visual-changes-column">
 				<span class="wcd-visual-percentage <?php echo esc_attr( $sev ); ?>"><?php echo esc_html( self::format_percent( $percent ) ); ?>%</span>
 			</td>
-			<td><?php echo esc_html( $ai ); ?></td>
+			<td class="wcd-col-ai"><?php echo esc_html( $ai ); ?></td>
 			<td>
 			<?php
 			if ( $public ) :

@@ -98,7 +98,9 @@ class WCD_MainWP_Url_Sync {
 			);
 		}
 
-		$start = WCD_MainWP_API::start_url_sync( $domain, true, $api_token );
+		// Never delete missing URLs on sync: a sync that drops some pages (timeout, partial fetch)
+		// would otherwise remove URLs and their settings. Matches the plugin and webapp (both send false).
+		$start = WCD_MainWP_API::start_url_sync( $domain, false, $api_token );
 		if ( ! $start['ok'] ) {
 			return array(
 				'ok'    => false,

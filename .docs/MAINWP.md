@@ -311,6 +311,26 @@ The client reads `WCD_API_URL` first, then `WCD_API_URL_V2`, then the production
 `wp-env start` after changing the override. Note: wp-env runs in Docker, so the override host must be
 resolvable + reachable from inside the container.
 
+## Release / Build
+
+The version lives in **four** places that must always match (the build script enforces this):
+the `Version:` plugin header and the `WCD_MAINWP_VERSION` constant (both in
+`webchangedetector-for-mainwp.php`), the `Stable tag:` in `readme.txt`, and the latest
+`= X.Y.Z =` changelog entry in `readme.txt`. NEVER change version numbers without asking first.
+
+`scripts/build-release.sh` (modeled on `wcd-plugin/scripts/deploy-to-wp-svn.sh`) validates the
+versions and the Git status, then rsyncs a clean copy (excludes from `.distignore` + junk like
+`.DS_Store`) to `/Users/mike/htdocs/wcd/wp-repo-mainwp/trunk/` (same layout as `wp-repo-plugin`:
+trunk/tags/assets/branches). It then asks interactively whether to create the upload zip
+(`wp-repo-mainwp/webchangedetector-for-mainwp-X.Y.Z.zip`, top-level folder = plugin slug) and
+whether to create the Git tag `vX.Y.Z`.
+
+There is no WordPress.org SVN repo yet; the zip is uploaded manually. Once the SVN repo exists,
+check it out as `wp-repo-mainwp` and extend the script with the SVN commit/tag steps.
+
+**Claude Code restrictions:** NEVER run `scripts/build-release.sh` for a real build (deploy
+blacklist; `--dry-run` for verification is OK when asked). NEVER create or push Git tags.
+
 ## Related Documentation
 
 - Hook reference + principle: `.docs/MAINWP-HOOKS.md`

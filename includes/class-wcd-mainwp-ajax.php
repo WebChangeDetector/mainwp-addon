@@ -120,6 +120,31 @@ class WCD_MainWP_Ajax {
 		return $data;
 	}
 
+	/**
+	 * Self-heal a stale group mapping. When the API answers a group call with 404, the stored UUID
+	 * points at a deleted group or one from a different account (e.g. after an API token switch).
+	 * Forget this site's provisioning so re-enabling it re-creates fresh WCD resources, and send a
+	 * clear message instead of the raw "No query results" API error. No-op (returns) for any other
+	 * failure, so the caller's generic error handling still runs.
+	 *
+	 * @param int   $site_id  MainWP site id.
+	 * @param array $response Normalized API result (expects an integer 'status').
+	 * @return void
+	 */
+	protected static function reject_if_group_gone( int $site_id, array $response ): void {
+		if ( 404 !== (int) ( $response['status'] ?? 0 ) ) {
+			return;
+		}
+
+		WCD_MainWP_Site_Map::reset_site( $site_id );
+		wp_send_json_error(
+			array(
+				'message'  => __( 'This site is no longer linked to your WebChange Detector account. Enable it again to re-sync.', 'webchangedetector-for-mainwp' ),
+				'unlinked' => true,
+			)
+		);
+	}
+
 	/* ─────────────────────────── Settings actions ──────────────────────── */
 
 	/**
@@ -224,6 +249,7 @@ class WCD_MainWP_Ajax {
 
 		$response = WCD_MainWP_API::get_group_urls( $group_id, self::token(), self::url_list_filters() );
 		if ( ! $response['ok'] ) {
+			self::reject_if_group_gone( $site_id, $response );
 			wp_send_json_error( array( 'message' => $response['error'] ) );
 		}
 
@@ -292,6 +318,7 @@ class WCD_MainWP_Ajax {
 			self::token()
 		);
 		if ( ! $response['ok'] ) {
+			self::reject_if_group_gone( $site_id, $response );
 			wp_send_json_error( array( 'message' => $response['error'] ) );
 		}
 

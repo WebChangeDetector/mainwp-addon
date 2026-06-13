@@ -195,6 +195,28 @@ class WCD_MainWP_Site_Map {
 			);
 		}
 
+		// Not provisioned locally. The account may already hold a MainWP website for this domain
+		// (e.g. after an API token switch or a reinstall): adopt it instead of creating duplicate WCD
+		// resources. The website carries managed_by=mainwp, so this never picks up a first-party site.
+		$found = self::find_existing_website( $domain, $api_token );
+		if ( ! empty( $found ) ) {
+			self::save_site(
+				$site_id,
+				array_merge(
+					$found,
+					array(
+						'domain'  => $domain,
+						'enabled' => true,
+					)
+				)
+			);
+
+			return array(
+				'ok'    => true,
+				'error' => '',
+			);
+		}
+
 		// Create the manual + auto detection groups. Both named the bare domain (matches the
 		// customer plugin); the monitoring flag distinguishes them. Each UUID is persisted as soon
 		// as it exists, so a retry after a partial failure reuses it instead of provisioning
@@ -289,6 +311,34 @@ class WCD_MainWP_Site_Map {
 	}
 
 	/**
+	 * Forget ALL provisioning (every site's UUIDs + enabled flags). Used when the bound WebChange
+	 * Detector account changes (API token switch): the stored website/group UUIDs belong to the
+	 * previous account and would 404, so the map must be rebuilt by re-enabling sites under the new
+	 * account. MainWP still owns the list of sites, so the Sites page simply shows them all disabled.
+	 *
+	 * @return void
+	 */
+	public static function reset_all(): void {
+		WCD_MainWP_Options::delete( self::OPTION_KEY );
+	}
+
+	/**
+	 * Forget a single site's provisioning so the next enable re-creates fresh WCD resources. Used to
+	 * self-heal when the API reports the stored group no longer exists (deleted, or left over from a
+	 * different account).
+	 *
+	 * @param int $site_id MainWP site id.
+	 * @return void
+	 */
+	public static function reset_site( int $site_id ): void {
+		$map = self::all();
+		if ( isset( $map[ $site_id ] ) ) {
+			unset( $map[ $site_id ] );
+			WCD_MainWP_Options::set( self::OPTION_KEY, $map );
+		}
+	}
+
+	/**
 	 * Pull a UUID out of a create response (group or website resource).
 	 *
 	 * @param array $response The API response array.
@@ -304,5 +354,52 @@ class WCD_MainWP_Site_Map {
 		}
 
 		return isset( $data['id'] ) ? (string) $data['id'] : '';
+	}
+
+	/**
+	 * Look up this account's existing MainWP website for a domain and return its UUIDs, so a site can
+	 * re-link to it instead of provisioning duplicates. Returns an empty array when none exists or the
+	 * lookup fails (caller then creates a fresh one).
+	 *
+	 * @param string $domain    Normalized domain.
+	 * @param string $api_token Bearer token.
+	 * @return array { website_uuid, manual_group_uuid, auto_group_uuid } or an empty array.
+	 */
+	protected static function find_existing_website( string $domain, string $api_token ): array {
+		$response = WCD_MainWP_API::get_websites( $domain, $api_token );
+		if ( empty( $response['ok'] ) || empty( $response['data'] ) ) {
+			return array();
+		}
+
+		// The collection endpoint wraps the rows in a `data` envelope.
+		$data = $response['data'];
+		$list = ( isset( $data['data'] ) && is_array( $data['data'] ) ) ? $data['data'] : ( is_array( $data ) ? $data : array() );
+
+		foreach ( $list as $site ) {
+			if ( ! is_array( $site ) ) {
+				continue;
+			}
+			// Only ever adopt a website that is actually MainWP-managed and for this exact domain.
+			// Guards against an API that ignores the managed_by/domain filter, which would otherwise
+			// re-link us onto a first-party website and mix ?p=ID URLs with the clean permalinks.
+			if ( WCD_MainWP_API::MANAGED_BY !== (string) ( $site['managed_by'] ?? '' ) ) {
+				continue;
+			}
+			if ( $domain !== (string) ( $site['domain'] ?? '' ) ) {
+				continue;
+			}
+			$website_uuid = (string) ( $site['id'] ?? '' );
+			$manual_uuid  = (string) ( $site['manual_detection_group'] ?? '' );
+			// A website is only useful to us with its manual group (the on-demand checks live there).
+			if ( '' !== $website_uuid && '' !== $manual_uuid ) {
+				return array(
+					'website_uuid'      => $website_uuid,
+					'manual_group_uuid' => $manual_uuid,
+					'auto_group_uuid'   => (string) ( $site['auto_detection_group'] ?? '' ),
+				);
+			}
+		}
+
+		return array();
 	}
 }

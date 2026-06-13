@@ -164,6 +164,23 @@ class WCD_MainWP_Bootstrap {
 		return 'Extensions-' . str_replace( ' ', '-', ucwords( str_replace( '-', ' ', $dir ) ) );
 	}
 
+	/**
+	 * The shared "no API token yet" setup sentence, with the account and settings links resolved.
+	 * One source of truth for the dashboard hint banner and the settings-page notice.
+	 *
+	 * @return string HTML (safe for wp_kses_post output): the instruction with two anchors.
+	 */
+	public static function no_token_hint_html(): string {
+		$settings_url = admin_url( 'admin.php?page=' . self::settings_page_slug() );
+
+		return sprintf(
+			/* translators: 1: webchangedetector.com account link, 2: settings page link. */
+			esc_html__( 'Create an account at %1$s if you do not have one yet, then enter your API token in %2$s to enable visual checks.', 'webchangedetector-for-mainwp' ),
+			'<a href="https://www.webchangedetector.com" target="_blank" rel="noopener">webchangedetector.com</a>',
+			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'the settings', 'webchangedetector-for-mainwp' ) . '</a>'
+		);
+	}
+
 	/* ───────────────────────────── Entry point ─────────────────────────── */
 
 	/**
@@ -179,7 +196,9 @@ class WCD_MainWP_Bootstrap {
 		if ( 'dashboard' !== $context ) {
 			return;
 		}
-		self::render_scoped_banner();
+		// The dashboard overview is the reliable first-run surface, so it carries the no-token hint
+		// (instead of rendering nothing). The Updates-page entry point does not: see render_scoped_banner().
+		self::render_scoped_banner( false, true );
 	}
 
 	/**
@@ -203,10 +222,16 @@ class WCD_MainWP_Bootstrap {
 	 * Shared by the dashboard and Updates-page entry points. No-ops without a token or enabled sites.
 	 *
 	 * @param bool $updates_known_present Force the CTA enabled (caller already knows updates exist).
+	 * @param bool $allow_no_token_hint   When no token is set, render the setup hint instead of nothing.
+	 *                                    Only the dashboard overview passes true; the Updates-page entry
+	 *                                    point keeps the silent no-op (its banner is already conditional).
 	 */
-	protected static function render_scoped_banner( bool $updates_known_present = false ): void {
-		// No API token yet: nothing to offer.
+	protected static function render_scoped_banner( bool $updates_known_present = false, bool $allow_no_token_hint = false ): void {
+		// No API token yet: nothing to run. Offer the setup hint on surfaces that asked for it.
 		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
+			if ( $allow_no_token_hint ) {
+				include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner-no-token.php';
+			}
 			return;
 		}
 
@@ -409,7 +434,15 @@ class WCD_MainWP_Bootstrap {
 			'confirmDisableAll' => __( 'Disable all %s checks for this site?', 'webchangedetector-for-mainwp' ),
 			'noSites'           => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ),
 			'genericError'      => __( 'Something went wrong.', 'webchangedetector-for-mainwp' ),
-			'syncing'           => __( 'Syncing URLs…', 'webchangedetector-for-mainwp' ),
+			'disabled'          => __( 'Inactive', 'webchangedetector-for-mainwp' ),
+			// "Activate checks for all websites" on the Sites & pages settings tab.
+			/* translators: 1: current site number, 2: total sites. */
+			'bulkSyncProgress'  => __( 'Activating %1$d of %2$d websites…', 'webchangedetector-for-mainwp' ),
+			/* translators: 1: activated site count, 2: total sites. */
+			'bulkSyncDone'      => __( 'Activated %1$d of %2$d websites.', 'webchangedetector-for-mainwp' ),
+			/* translators: %d: number of websites that failed to activate. */
+			'bulkSyncFailed'    => __( '%d failed.', 'webchangedetector-for-mainwp' ),
+			'bulkSyncConfirm'   => __( 'This activates visual checks for every managed website. Websites are unlimited on every plan; only the checks you run count against it. Continue?', 'webchangedetector-for-mainwp' ),
 			'ctaRunning'        => __( 'Visual check running…', 'webchangedetector-for-mainwp' ),
 			'closeRunning'      => __( 'Updates are still running. Close anyway? The run keeps going in the background.', 'webchangedetector-for-mainwp' ),
 			// Resume of an interrupted run.

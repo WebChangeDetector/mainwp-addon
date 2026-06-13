@@ -5,8 +5,13 @@
 .docs
 .wp-env.json
 .wp-env.override.json
+composer.json
 composer.lock
 phpcs.xml.dist
 vendor
 README.md
 node_modules
+scripts
+.DS_Store
+.github
+.claude

@@ -19,7 +19,11 @@
 
 
 /* ── Batch accordion table (native MainWP updates-table pattern) ───────── */
-.wcd-runs-list { margin-top: 8px; }
+/* MainWP's mainwp-manage-updates-table forces `white-space: nowrap` at tablet/desktop widths, which
+   the long AI Summary column would stretch past the page (MainWP scrolls its own updates table; ours
+   is not in that container). Let the AI column wrap, and keep a horizontal scroll as a safety net. */
+.wcd-runs-list { margin-top: 8px; overflow-x: auto; }
+.wcd-runs .wcd-col-ai { white-space: normal; word-break: break-word; min-width: 16em; }
 .wcd-runs-table .wcd-runs-batch-head { cursor: pointer; }
 .wcd-runs-table .accordion-trigger i.icon { opacity: .6; }
 /* Fomantic's stackable table forces `display` on rows at mobile widths, which would defeat the
