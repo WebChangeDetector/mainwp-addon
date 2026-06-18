@@ -13,17 +13,18 @@
 #      ../wp-repo-mainwp/trunk/ (same layout as wp-repo-plugin, SVN-ready).
 #   4. Optionally creates a zip for manual upload (asks during the process).
 #   5. Optionally creates a Git tag vX.Y.Z (asks during the process).
-#
-# There is no WordPress.org SVN repository for this plugin yet. Once it
-# exists, check it out as wp-repo-mainwp and extend this script with the
-# svn add/commit steps from the WP plugin script.
+#   6. Optionally deploys to the WordPress.org SVN repository (asks during the
+#      process): checks the repo out in place as wp-repo-mainwp if needed,
+#      stages adds/deletes, copies trunk to tags/X.Y.Z and commits.
 #
 # Usage:
-#   ./scripts/build-release.sh [--dry-run] [--force]
+#   ./scripts/build-release.sh [--dry-run] [--force] [--svn-user <name>]
 #
 # Options:
-#   --dry-run    Run validation and show what would be built without building
-#   --force      Skip confirmation prompts (use with caution)
+#   --dry-run         Run validation and show what would be built without building
+#   --force           Skip confirmation prompts (use with caution)
+#   --svn-user <name> WordPress.org SVN username for the deploy commit
+#                     (otherwise prompted; under --force, cached creds are used)
 #
 # Author: Mike Miler
 # Project: Web Change Detector
@@ -46,6 +47,7 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WCD_ROOT="$(cd "$PLUGIN_DIR/../../../../../.." && pwd)"
 REPO_DIR="${WCD_ROOT}/wp-repo-mainwp"
 TRUNK_DIR="${REPO_DIR}/trunk"
+SVN_URL="https://plugins.svn.wordpress.org/${PLUGIN_SLUG}/"
 MAIN_PLUGIN_FILE="${PLUGIN_DIR}/${PLUGIN_SLUG}.php"
 README_FILE="${PLUGIN_DIR}/readme.txt"
 DISTIGNORE_FILE="${PLUGIN_DIR}/.distignore"
@@ -57,30 +59,44 @@ JUNK_PATTERNS=(".DS_Store" "._*" "Thumbs.db" "*.log" ".git" ".svn")
 # Parse command line arguments
 DRY_RUN=false
 FORCE=false
+SVN_USER=""
 
-for arg in "$@"; do
-    case $arg in
+while [ $# -gt 0 ]; do
+    case $1 in
         --dry-run)
             DRY_RUN=true
             ;;
         --force)
             FORCE=true
             ;;
+        --svn-user)
+            shift
+            if [ -z "${1:-}" ]; then
+                echo -e "${RED}--svn-user requires a username${NC}"
+                exit 1
+            fi
+            SVN_USER="$1"
+            ;;
+        --svn-user=*)
+            SVN_USER="${1#*=}"
+            ;;
         --help)
-            echo "Usage: $0 [--dry-run] [--force]"
+            echo "Usage: $0 [--dry-run] [--force] [--svn-user <name>]"
             echo ""
             echo "Options:"
-            echo "  --dry-run    Run validation and show what would be built without building"
-            echo "  --force      Skip confirmation prompts (use with caution)"
-            echo "  --help       Show this help message"
+            echo "  --dry-run          Run validation and show what would be built without building"
+            echo "  --force            Skip confirmation prompts (use with caution)"
+            echo "  --svn-user <name>  WordPress.org SVN username for the deploy commit"
+            echo "  --help             Show this help message"
             exit 0
             ;;
         *)
-            echo -e "${RED}Unknown option: $arg${NC}"
+            echo -e "${RED}Unknown option: $1${NC}"
             echo "Use --help for usage information"
             exit 1
             ;;
     esac
+    shift
 done
 
 ################################################################################
@@ -625,6 +641,122 @@ No changelog entry available."
 }
 
 ################################################################################
+# WordPress.org SVN Functions
+################################################################################
+
+# Ensure wp-repo-mainwp is an SVN working copy. If .svn is missing, check the
+# repo out in place with --force: the wp.org repo already contains the
+# trunk/tags/branches/assets directories, so --force lets svn adopt the existing
+# (already-built) local dirs instead of tree-conflicting on them. The built
+# files inside trunk then show as unversioned and are added by svn_deploy.
+ensure_svn_checkout() {
+    if [ -d "$REPO_DIR/.svn" ]; then
+        print_success "SVN working copy found: $REPO_DIR"
+        return 0
+    fi
+
+    print_info "No SVN working copy yet. Checking out $SVN_URL in place..."
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would run: svn checkout --force ${SVN_AUTH[*]} \"$SVN_URL\" \"$REPO_DIR\""
+        return 0
+    fi
+
+    if svn checkout --force "${SVN_AUTH[@]}" "$SVN_URL" "$REPO_DIR"; then
+        print_success "SVN repository checked out into $REPO_DIR"
+    else
+        exit_error "Failed to check out SVN repository from $SVN_URL"
+    fi
+}
+
+# Optionally deploy the built trunk to the WordPress.org SVN repository.
+# Runs LAST, after sync_to_trunk has already populated trunk/. Opt-in: the
+# local build behaves exactly as before when this is declined.
+svn_deploy() {
+    print_header "Deploying to WordPress.org SVN"
+
+    # Resolve auth first so the dry-run preview shows the real command shape.
+    SVN_AUTH=()
+    if [ -n "$SVN_USER" ]; then
+        SVN_AUTH=(--username "$SVN_USER")
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would offer to deploy version $BUILD_VERSION to $SVN_URL"
+        print_info "[DRY RUN] Would ensure SVN checkout (svn checkout --force), then run:"
+        print_info "  svn update ${SVN_AUTH[*]}"
+        print_info "  svn status trunk | grep '^?' | svn add  (new files in trunk)"
+        print_info "  svn status trunk | grep '^!' | svn delete  (removed files in trunk)"
+        print_info "  svn copy trunk tags/$BUILD_VERSION  (if not present)"
+        print_info "  svn commit ${SVN_AUTH[*]} -m \"Deploying version $BUILD_VERSION\""
+        return 0
+    fi
+
+    if ! ask_yes_no "Deploy version $BUILD_VERSION to WordPress.org SVN now?"; then
+        print_info "Skipping WordPress.org SVN deploy"
+        return 0
+    fi
+
+    if ! command -v svn &> /dev/null; then
+        print_warning "svn command not found. Skipping WordPress.org SVN deploy."
+        return 0
+    fi
+
+    # Prompt for the username unless one was supplied or --force is set
+    # (under --force with no --svn-user we fall back to SVN's cached creds).
+    if [ -z "$SVN_USER" ] && [ "$FORCE" != true ]; then
+        read -p "$(echo -e "${YELLOW}WordPress.org SVN username (blank = use cached credentials): ${NC}")" -r SVN_USER
+        if [ -n "$SVN_USER" ]; then
+            SVN_AUTH=(--username "$SVN_USER")
+        fi
+    fi
+
+    ensure_svn_checkout
+
+    cd "$REPO_DIR"
+
+    print_info "Updating SVN working copy..."
+    svn update "${SVN_AUTH[@]}"
+
+    # Stage new and removed files. Scope to trunk/ so root-level artifacts (the
+    # release zip, the empty tags/branches/assets scaffold) are never committed;
+    # only the distributable files inside trunk are. The {}@ peg-revision suffix
+    # guards filenames containing an '@'. Errors are tolerated (nothing to do).
+    print_info "Staging new files in trunk..."
+    svn status trunk | grep "^?" | awk '{print $2}' | xargs -I {} svn add {}@ 2>/dev/null || true
+    print_info "Staging removed files in trunk..."
+    svn status trunk | grep "^!" | awk '{print $2}' | xargs -I {} svn delete {}@ 2>/dev/null || true
+
+    # Tag from trunk (skip if the tag already exists so re-runs don't fail;
+    # a trunk-only re-commit is still possible). svn copy schedules the tag add
+    # itself, so it is not affected by the trunk-scoped status above.
+    if [ -d "tags/$BUILD_VERSION" ]; then
+        print_warning "SVN tag tags/$BUILD_VERSION already exists; skipping tag creation"
+    else
+        print_info "Creating tag from trunk: tags/$BUILD_VERSION"
+        if ! svn copy trunk "tags/$BUILD_VERSION"; then
+            cd - > /dev/null
+            exit_error "Failed to create SVN tag tags/$BUILD_VERSION"
+        fi
+    fi
+
+    print_info "Final SVN status:"
+    svn status
+
+    confirm "Commit version $BUILD_VERSION to WordPress.org?"
+
+    print_info "Committing..."
+    if svn commit "${SVN_AUTH[@]}" -m "Deploying version $BUILD_VERSION"; then
+        print_success "Committed version $BUILD_VERSION to WordPress.org SVN"
+        export SVN_DEPLOYED=true
+    else
+        cd - > /dev/null
+        exit_error "SVN commit failed"
+    fi
+
+    cd - > /dev/null
+}
+
+################################################################################
 # Pre-flight Checks
 ################################################################################
 
@@ -667,6 +799,7 @@ main() {
     echo -e "Plugin:        ${GREEN}${PLUGIN_SLUG}${NC}"
     echo -e "Version:       ${GREEN}${BUILD_VERSION}${NC}"
     echo -e "Trunk:         ${BLUE}${TRUNK_DIR}${NC}"
+    echo -e "SVN repo:      ${BLUE}${SVN_URL}${NC}"
     echo -e "Git Tagging:   ${YELLOW}$([ "$SKIP_GIT" = true ] && echo "Disabled" || echo "Enabled")${NC}"
     echo -e "Dry Run:       ${YELLOW}${DRY_RUN}${NC}"
     echo ""
@@ -680,6 +813,7 @@ main() {
     verify_trunk
     create_zip
     create_git_tag
+    svn_deploy
 
     if [ "$DRY_RUN" = false ]; then
         print_header "BUILD SUCCESSFUL!"
@@ -692,7 +826,12 @@ main() {
         if [ "${TAG_CREATED:-false}" = true ]; then
             print_success "Git tag v$BUILD_VERSION created"
         fi
-        print_info "Upload the zip manually (no WordPress.org SVN repo yet)"
+        if [ "${SVN_DEPLOYED:-false}" = true ]; then
+            print_success "Deployed to WordPress.org: trunk + tags/$BUILD_VERSION"
+            print_info "Live at: https://wordpress.org/plugins/${PLUGIN_SLUG}/"
+        else
+            print_info "Not deployed to WordPress.org SVN (upload the zip manually if needed)"
+        fi
     else
         print_info "\nDry run complete. No changes were made."
         print_info "Run without --dry-run to perform the actual build."
