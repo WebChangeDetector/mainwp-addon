@@ -114,7 +114,9 @@ constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-plugin`. Ever
 `['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`.
 
 Methods: `get_account`, `list_groups`, `create_group`, `get_group_urls`, `update_url_in_group`,
-`update_urls_in_group`, `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
+`update_urls_in_group`, `select_all_urls_in_group` (toggles one device for ALL group urls in one
+`PUT /groups/{id}/urls/select-all` call, a single SQL UPDATE server-side — used by the "select all"
+toggles so large sites stay fast), `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
 (supports `batch_per_group`: one batch per group + a group->batch map in the response), `get_queues`,
 `get_comparisons`, `get_batch`, `list_batches`, `update_comparison`.
 
@@ -322,14 +324,24 @@ the `Version:` plugin header and the `WCD_MAINWP_VERSION` constant (both in
 versions and the Git status, then rsyncs a clean copy (excludes from `.distignore` + junk like
 `.DS_Store`) to `/Users/mike/htdocs/wcd/wp-repo-mainwp/trunk/` (same layout as `wp-repo-plugin`:
 trunk/tags/assets/branches). It then asks interactively whether to create the upload zip
-(`wp-repo-mainwp/webchangedetector-for-mainwp-X.Y.Z.zip`, top-level folder = plugin slug) and
-whether to create the Git tag `vX.Y.Z`.
+(`wp-repo-mainwp/webchangedetector-for-mainwp-X.Y.Z.zip`, top-level folder = plugin slug),
+whether to create the Git tag `vX.Y.Z`, and whether to deploy to WordPress.org SVN.
 
-There is no WordPress.org SVN repo yet; the zip is uploaded manually. Once the SVN repo exists,
-check it out as `wp-repo-mainwp` and extend the script with the SVN commit/tag steps.
+The plugin is approved and published; the SVN repo is
+`https://plugins.svn.wordpress.org/webchangedetector-for-mainwp/`. The optional **SVN deploy**
+step (default No, so a plain local build is unaffected when declined) checks the repo out in
+place as `wp-repo-mainwp` if `.svn` is missing (`svn checkout --force`, so svn adopts the
+already-built `trunk/` and the scaffold dirs instead of tree-conflicting on them), runs
+`svn update`, stages adds/deletes scoped to `trunk/` (so the release zip and the empty
+tags/branches/assets scaffold at the repo root are never committed), copies `trunk` to
+`tags/X.Y.Z` (skipped if the tag already exists), shows the status, and commits
+`Deploying version X.Y.Z` after a final confirmation. Auth: the wp.org
+username is prompted (or passed via `--svn-user <name>`); under `--force` with no `--svn-user`
+SVN's cached credentials are used. The zip can still be uploaded manually as a fallback.
 
-**Claude Code restrictions:** NEVER run `scripts/build-release.sh` for a real build (deploy
-blacklist; `--dry-run` for verification is OK when asked). NEVER create or push Git tags.
+**Claude Code restrictions:** NEVER run `scripts/build-release.sh` for a real build or SVN
+deploy (deploy blacklist; `--dry-run` for verification is OK when asked). NEVER create or push
+Git tags or run `svn commit`.
 
 ## Related Documentation
 

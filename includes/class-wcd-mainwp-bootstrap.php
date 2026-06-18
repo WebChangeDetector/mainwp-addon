@@ -425,6 +425,7 @@ class WCD_MainWP_Bootstrap {
 			// URL panel: search, pagination, select-all.
 			'searchUrls'        => __( 'Search URLs…', 'webchangedetector-for-mainwp' ),
 			'selectAll'         => __( 'Select all:', 'webchangedetector-for-mainwp' ),
+			'activateNew'       => __( 'Activate new URLs by default:', 'webchangedetector-for-mainwp' ),
 			'prev'              => __( 'Prev', 'webchangedetector-for-mainwp' ),
 			'next'              => __( 'Next', 'webchangedetector-for-mainwp' ),
 			/* translators: %s: total URL count. */

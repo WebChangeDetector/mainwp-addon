@@ -240,6 +240,30 @@ class WCD_MainWP_API {
 	}
 
 	/**
+	 * Enable or disable one viewport (desktop|mobile) for ALL URLs of a group in a single API call.
+	 *
+	 * The API runs one SQL UPDATE over the group's pivot rows, so this stays fast even on sites with
+	 * thousands of URLs (no per-URL payload, no chunked round-trips).
+	 *
+	 * @param string $group_id  Group UUID.
+	 * @param string $device    'desktop' or 'mobile'.
+	 * @param bool   $enabled   Whether that viewport should be screenshotted for every URL.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function select_all_urls_in_group( string $group_id, string $device, bool $enabled, string $api_token = '' ): array {
+		return self::request(
+			'PUT',
+			'/groups/' . rawurlencode( $group_id ) . '/urls/select-all',
+			array(
+				'device'  => $device,
+				'enabled' => $enabled,
+			),
+			$api_token
+		);
+	}
+
+	/**
 	 * Update a single URL in a group.
 	 *
 	 * @param string $group_id  Group UUID.
@@ -279,6 +303,19 @@ class WCD_MainWP_API {
 	}
 
 	/**
+	 * Update a website's settings (e.g. url_activation_defaults). The website is resolved by its
+	 * UUID under the current account, so no domain/managed_by is needed here.
+	 *
+	 * @param string $website_id Website UUID.
+	 * @param array  $fields     Fields to update, e.g. 'url_activation_defaults' => ['desktop' => true, 'mobile' => false].
+	 * @param string $api_token  Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function update_website( string $website_id, array $fields, string $api_token = '' ): array {
+		return self::request( 'PATCH', '/websites/' . rawurlencode( $website_id ), $fields, $api_token );
+	}
+
+	/**
 	 * Fetch this account's MainWP-managed website(s) for a domain (managed_by=mainwp). Used to reuse
 	 * an existing website instead of creating a duplicate (e.g. after an API token switch).
 	 *
@@ -310,7 +347,17 @@ class WCD_MainWP_API {
 	 * @return array Normalized API result.
 	 */
 	public static function sync_urls( array $urls, string $domain, string $api_token = '' ): array {
-		return self::request( 'POST', '/sync-urls', array( 'urls' => $urls ), $api_token, array(), array( 'x-wcd-domain' => $domain, 'x-wcd-managed-by' => self::MANAGED_BY ) );
+		return self::request(
+			'POST',
+			'/sync-urls',
+			array( 'urls' => $urls ),
+			$api_token,
+			array(),
+			array(
+				'x-wcd-domain'     => $domain,
+				'x-wcd-managed-by' => self::MANAGED_BY,
+			)
+		);
 	}
 
 	/**
@@ -324,7 +371,17 @@ class WCD_MainWP_API {
 	 * @return array Normalized API result.
 	 */
 	public static function start_url_sync( string $domain, bool $delete_missing_urls = false, string $api_token = '' ): array {
-		return self::request( 'POST', '/start-sync', array( 'delete_missing_urls' => $delete_missing_urls ), $api_token, array(), array( 'x-wcd-domain' => $domain, 'x-wcd-managed-by' => self::MANAGED_BY ) );
+		return self::request(
+			'POST',
+			'/start-sync',
+			array( 'delete_missing_urls' => $delete_missing_urls ),
+			$api_token,
+			array(),
+			array(
+				'x-wcd-domain'     => $domain,
+				'x-wcd-managed-by' => self::MANAGED_BY,
+			)
+		);
 	}
 
 	/* ─────────────────────────── Screenshots ───────────────────────────── */

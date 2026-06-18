@@ -25,14 +25,6 @@ class WCD_MainWP_Ajax {
 	// URL list page size on the Settings tab.
 	const URL_PAGE_SIZE = 50;
 
-	// Select-all: id-fetch page size and a runaway cap (20k URLs is beyond any sane child site).
-	const SELECT_ALL_PER_PAGE  = 1000;
-	const SELECT_ALL_MAX_PAGES = 20;
-
-	// URLs per bulk PUT. The API matches every payload item against ALL group URLs in memory
-	// (O(items x urls)), so one huge PUT risks its PHP timeout; chunking bounds each request.
-	const SELECT_ALL_PUT_CHUNK = 500;
-
 	/**
 	 * Register every AJAX action handler.
 	 *
@@ -45,6 +37,7 @@ class WCD_MainWP_Ajax {
 			'get_site_urls',
 			'update_url',
 			'update_all_urls',
+			'save_url_activation',
 			'banner_stats',
 			'preflight',
 			'take_pre',
@@ -272,9 +265,11 @@ class WCD_MainWP_Ajax {
 		}
 
 		$payload = array(
-			'urls'   => $clean,
-			'active' => $active,
-			'total'  => count( $clean ),
+			'urls'                    => $clean,
+			'active'                  => $active,
+			'total'                   => count( $clean ),
+			// Cached per-website defaults for newly synced URLs (drives the panel's toggles).
+			'url_activation_defaults' => WCD_MainWP_Site_Map::get_url_activation_defaults( $site_id ),
 		);
 
 		if ( $paginated ) {
@@ -331,53 +326,11 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
-	 * Collect ALL URL ids of a group (paginated id-fetch loop). Sends a JSON error itself when the
-	 * API fails: at that point nothing has been written yet.
-	 *
-	 * @param string $group_id The WCD group uuid.
-	 * @return array
-	 */
-	protected static function all_group_url_ids( string $group_id ): array {
-		$ids = array();
-		for ( $page = 1; $page <= self::SELECT_ALL_MAX_PAGES; $page++ ) {
-			$response = WCD_MainWP_API::get_group_urls(
-				$group_id,
-				self::token(),
-				array(
-					'page'     => $page,
-					'per_page' => self::SELECT_ALL_PER_PAGE,
-				)
-			);
-			if ( ! $response['ok'] ) {
-				wp_send_json_error( array( 'message' => $response['error'] ) );
-			}
-
-			$urls = WCD_MainWP_Update_Flow::extract_urls( $response['data'] );
-			foreach ( $urls as $url ) {
-				if ( ! empty( $url['id'] ) ) {
-					$ids[] = (string) $url['id'];
-				}
-			}
-
-			$meta = is_array( $response['data'] ) && isset( $response['data']['meta'] ) ? (array) $response['data']['meta'] : array();
-			if ( count( $urls ) < self::SELECT_ALL_PER_PAGE || $page >= (int) ( $meta['last_page'] ?? PHP_INT_MAX ) ) {
-				return $ids;
-			}
-		}
-
-		// The cap was hit with pages still left: writing a truncated selection would be silent
-		// partial state, so refuse instead.
-		wp_send_json_error( array( 'message' => __( 'This site has too many URLs to select all at once.', 'webchangedetector-for-mainwp' ) ) );
-
-		return array();
-	}
-
-	/**
 	 * Enable or disable one viewport (desktop|mobile) for ALL URLs of a site's group.
 	 *
-	 * The payload carries only the toggled device key per URL, so the other viewport stays
-	 * untouched. Chunked bulk PUTs; a mid-chunk failure reports the partial progress (re-running
-	 * select-all is the idempotent retry).
+	 * One API call (`/urls/select-all`) toggles the whole device column server-side in a single SQL
+	 * UPDATE, so this stays fast regardless of how many URLs the site has. Only the toggled device
+	 * changes; the other viewport is left untouched. Re-running select-all is the idempotent retry.
 	 *
 	 * @return void
 	 */
@@ -392,45 +345,55 @@ class WCD_MainWP_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Missing group or device.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		$payload = array();
-		foreach ( self::all_group_url_ids( $group_id ) as $url_id ) {
-			$payload[] = array(
-				'id'    => $url_id,
-				$device => $enabled,
-			);
-		}
-		if ( ! $payload ) {
-			wp_send_json_success( array( 'updated' => 0 ) );
+		$response = WCD_MainWP_API::select_all_urls_in_group( $group_id, $device, $enabled, self::token() );
+		if ( ! $response['ok'] ) {
+			self::reject_if_group_gone( $site_id, $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
 		}
 
-		$updated = 0;
-		$counts  = array();
-		foreach ( array_chunk( $payload, self::SELECT_ALL_PUT_CHUNK ) as $chunk ) {
-			$response = WCD_MainWP_API::update_urls_in_group( $group_id, $chunk, self::token() );
-			if ( ! $response['ok'] ) {
-				wp_send_json_error(
-					array(
-						'message' => sprintf(
-							/* translators: 1: updated URL count, 2: total URL count, 3: error message. */
-							__( 'Stopped after updating %1$d of %2$d URLs: %3$s', 'webchangedetector-for-mainwp' ),
-							$updated,
-							count( $payload ),
-							$response['error']
-						),
-					)
-				);
-			}
-			$updated += count( $chunk );
-			$counts   = is_array( $response['data'] ) ? $response['data'] : array();
-		}
-
+		$counts = is_array( $response['data'] ) ? $response['data'] : array();
 		wp_send_json_success(
 			array(
-				'updated' => $updated,
-				'active'  => (int) ( $counts['selected_urls_count'] ?? 0 ),
-				'checks'  => (int) ( $counts['selected_checks_count'] ?? 0 ),
+				'active' => (int) ( $counts['selected_urls_count'] ?? 0 ),
+				'checks' => (int) ( $counts['selected_checks_count'] ?? 0 ),
 			)
 		);
+	}
+
+	/**
+	 * Save the per-website "activate new URLs" defaults (desktop/mobile). These are applied by the API
+	 * to URLs the next sync first assigns to the site's detection groups; existing URLs keep their state.
+	 *
+	 * @return void
+	 */
+	public static function save_url_activation(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$site_id    = self::site_id();
+		$website_id = WCD_MainWP_Site_Map::get_website( $site_id );
+		$desktop    = ! empty( $_POST['desktop'] ) && 'false' !== $_POST['desktop'];
+		$mobile     = ! empty( $_POST['mobile'] ) && 'false' !== $_POST['mobile'];
+
+		if ( '' === $website_id ) {
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$defaults = array(
+			'desktop' => $desktop,
+			'mobile'  => $mobile,
+		);
+
+		$response = WCD_MainWP_API::update_website(
+			$website_id,
+			array( 'url_activation_defaults' => $defaults ),
+			self::token()
+		);
+		if ( ! $response['ok'] ) {
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		WCD_MainWP_Site_Map::set_url_activation_defaults( $site_id, $defaults );
+
+		wp_send_json_success( $defaults );
 	}
 
 	/**
