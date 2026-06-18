@@ -101,51 +101,6 @@ class WCD_MainWP_Site_Map {
 	}
 
 	/**
-	 * The stored WCD website UUID for a site.
-	 *
-	 * @param int $site_id MainWP site id.
-	 * @return string The website UUID, or an empty string.
-	 */
-	public static function get_website( int $site_id ): string {
-		return (string) ( self::for_site( $site_id )['website_uuid'] ?? '' );
-	}
-
-	/**
-	 * The cached "activate new URLs" defaults for a site (desktop/mobile). Mirrors the value stored on
-	 * the WCD website; defaults to off/off (the API default) until the user saves it here.
-	 *
-	 * @param int $site_id MainWP site id.
-	 * @return array{desktop: bool, mobile: bool}
-	 */
-	public static function get_url_activation_defaults( int $site_id ): array {
-		$stored = self::for_site( $site_id )['url_activation_defaults'] ?? array();
-
-		return array(
-			'desktop' => ! empty( $stored['desktop'] ),
-			'mobile'  => ! empty( $stored['mobile'] ),
-		);
-	}
-
-	/**
-	 * Cache the "activate new URLs" defaults for a site after a successful API update.
-	 *
-	 * @param int   $site_id  MainWP site id.
-	 * @param array $defaults { desktop: bool, mobile: bool }.
-	 * @return void
-	 */
-	public static function set_url_activation_defaults( int $site_id, array $defaults ): void {
-		self::save_site(
-			$site_id,
-			array(
-				'url_activation_defaults' => array(
-					'desktop' => ! empty( $defaults['desktop'] ),
-					'mobile'  => ! empty( $defaults['mobile'] ),
-				),
-			)
-		);
-	}
-
-	/**
 	 * Persist a single site entry.
 	 *
 	 * @param int   $site_id MainWP site id.
@@ -437,16 +392,10 @@ class WCD_MainWP_Site_Map {
 			$manual_uuid  = (string) ( $site['manual_detection_group'] ?? '' );
 			// A website is only useful to us with its manual group (the on-demand checks live there).
 			if ( '' !== $website_uuid && '' !== $manual_uuid ) {
-				$activation = is_array( $site['url_activation_defaults'] ?? null ) ? $site['url_activation_defaults'] : array();
-
 				return array(
-					'website_uuid'            => $website_uuid,
-					'manual_group_uuid'       => $manual_uuid,
-					'auto_group_uuid'         => (string) ( $site['auto_detection_group'] ?? '' ),
-					'url_activation_defaults' => array(
-						'desktop' => ! empty( $activation['desktop'] ),
-						'mobile'  => ! empty( $activation['mobile'] ),
-					),
+					'website_uuid'      => $website_uuid,
+					'manual_group_uuid' => $manual_uuid,
+					'auto_group_uuid'   => (string) ( $site['auto_detection_group'] ?? '' ),
 				);
 			}
 		}

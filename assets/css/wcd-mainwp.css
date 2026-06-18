@@ -70,8 +70,6 @@
 .wcd-url-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--wcd-border); }
 .wcd-url-selectall { display: inline-flex; align-items: center; gap: 10px; }
 .wcd-url-selectall label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--wcd-muted); cursor: pointer; }
-.wcd-url-activation { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
-.wcd-url-activation label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--wcd-muted); cursor: pointer; }
 .wcd-url-pager { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .wcd-url-pager:empty { display: none; }
 .wcd-url-pagegap { color: var(--wcd-muted); font-size: 12px; }

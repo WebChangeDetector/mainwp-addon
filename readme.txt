@@ -1,9 +1,9 @@
 === WebChange Detector for MainWP ===
-Contributors: Mike.Miler,Repat
+Contributors: Mike.Miler
 Tags: mainwp, visual regression testing, screenshots, updates, monitoring
 Requires at least: 6.0
 Tested up to: 7.0
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -23,8 +23,8 @@ An on-demand check is a visual diff you run around a change you make yourself, l
 = How it works =
 
 1. Create a free WebChange Detector account at [webchangedetector.com](https://www.webchangedetector.com) if you do not have one yet, then copy your API token from your account and enter it in MainWP.
-2. Enable the child sites you want to check.
-3. Sync each enabled child site's pages with "Sync WP URLs" so its pages become available, then select the pages to check (desktop and/or mobile).
+2. Enable the child sites you want to check. Each site's pages are synced automatically when you enable it.
+3. Select the pages to check (desktop and/or mobile).
 4. Click "Run visual check & update" on your MainWP dashboard or Updates page.
 5. The plugin captures pre-update screenshots, installs all pending updates, captures post-update screenshots and compares them. Before the pre-update screenshots and after the updates, the cache on each child site is cleared automatically, so the screenshots always show the real, freshly generated state of the site.
 6. Review the results on the Visual Checks page: every page with a visual change is flagged, including an AI summary of what changed.
@@ -60,10 +60,9 @@ The plugin sends data to `api.webchangedetector.com` only after you have entered
 2. Create a free WebChange Detector account at [www.webchangedetector.com](https://www.webchangedetector.com) if you do not have one yet.
 3. Copy your API token from your WebChange Detector account.
 4. Go to MainWP > Extensions > WebChange Detector and paste the API token into the "WebChange Detector API Token" field.
-5. Enable the child sites you want to check.
-6. Sync each enabled child site's pages with "Sync WP URLs" so its pages become available.
-7. Select the pages to check for desktop and/or mobile.
-8. Run your next update from the MainWP dashboard with "Run visual check & update".
+5. Enable the child sites you want to check. Each site's pages are synced automatically when you enable it (use "Activate checks for all websites" to do every managed site at once).
+6. Select the pages to check for desktop and/or mobile.
+7. Run your next update from the MainWP dashboard with "Run visual check & update".
 
 == Frequently Asked Questions ==
 
@@ -85,7 +84,7 @@ You choose. After enabling a child site, its published pages and posts are synce
 
 = Why do I need to sync the child site's pages? =
 
-Before it can check a site, the plugin needs the list of public URLs on that site. Syncing fetches the published pages and posts from the child and makes them available for selection. It runs automatically when you enable a site and again after MainWP syncs the child, and you can re-run it any time with the "Sync WP URLs" button. Until a site is synced, there are no pages to select and no checks can run.
+Before it can check a site, the plugin needs the list of public URLs on that site. Syncing fetches the published pages and posts from the child and makes them available for selection. It runs automatically when you enable a site and again after MainWP syncs the child. Until a site is synced, there are no pages to select and no checks can run.
 
 = What happens if a site is offline during an update run? =
 
@@ -101,18 +100,31 @@ Updates you start outside the plugin's own flow still trigger post-update screen
 
 == Screenshots ==
 
-1. The safe-update banner on the MainWP dashboard.
-2. Pre-flight summary: sites, pages, checks and credit coverage before the run.
-3. The unified run card: pre-update screenshots, updates, post-update screenshots.
-4. Visual Checks overview with filters and change detections.
-5. Per-site page selection for desktop and mobile.
+1. Sites & pages settings: activate a website and choose which pages are checked, separately for desktop and mobile. One click activates checks for all your managed websites.
+2. The WebChange Detector safe-update banner on your MainWP Operations dashboard, showing how many sites have updates and how many pages and checks the run will cover.
+3. Pre-flight summary before the run: sites, pages, screenshots, checks and credit coverage, plus the exact updates that will be installed.
+4. The run card capturing the pre-update screenshots across all sites.
+5. The run card installing the pending updates after the pre-update screenshots are captured.
+6. The run card capturing the post-update screenshots, ready to compare.
+7. The finished run: every site checked, "All good" or the number of pages to review, with Re-check and View results.
+8. Visual Checks overview: all your runs with filters for date, status, website and change.
+9. Side-by-side before/after comparison with the AI change analysis: real changes flagged, dynamic content auto-ignored by your rules.
 
 == Changelog ==
+
+= 1.0.1 =
+* Improvement: "Select all" pages is now instant, even on sites with thousands of URLs.
+* Improvement: new "Activate checks for all websites" button activates every managed site at once
+* Improvement: the dashboard now shows a short setup hint when no API token is connected yet.
+* Fix: switching your API token now re-links your existing websites under the new account instead of creating duplicates, and repairs stale links automatically.
 
 = 1.0.0 =
 * Initial release: safe-update flow (pre/post screenshots around MainWP updates), Visual Checks overview, dashboard widget, per-site URL selection, auto-enable for new sites, automatic cache clearing on child sites before pre-update screenshots and after updates.
 
 == Upgrade Notice ==
+
+= 1.0.1 =
+Maintenance release: faster "Select all", a one-click "Activate checks for all websites" button, automatic page syncing, and safer API-token switching.
 
 = 1.0.0 =
 Initial release.
