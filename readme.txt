@@ -103,15 +103,14 @@ Updates you start outside the plugin's own flow still trigger post-update screen
 
 == Screenshots ==
 
-1. Sites & pages settings: activate a website and choose which pages are checked, separately for desktop and mobile. One click activates checks for all your managed websites.
-2. The WebChange Detector Safe Update widget on your MainWP Operations dashboard, showing how many sites have updates and how many pages and checks the run will cover.
-3. Pre-flight summary before the run: sites, pages, checks and credit coverage, plus the exact updates that will be installed.
-4. The run card capturing the pre-update screenshots across all sites.
-5. The run card installing the pending updates after the pre-update screenshots are captured.
-6. The run card capturing the post-update screenshots, ready to compare.
-7. The finished run: every site checked, "All good" or the number of pages to review, with Re-check and View results.
-8. Visual Checks overview: all your runs with filters for date, status, website and change.
-9. Side-by-side before/after comparison with the AI change analysis: real changes flagged, dynamic content auto-ignored by your rules.
+1. The Safe Update widget on your MainWP Operations dashboard: how many sites have updates, how many pages and checks the next run will cover, and one button to start it.
+2. Pre-flight summary before the run: sites, pages, checks and credit coverage, plus the exact updates that will be installed, per site.
+3. The live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress. When it finishes you see "All good" or the number of pages to review, with Re-check and View results.
+4. Side-by-side before/after comparison with the AI change analysis: real changes flagged, dynamic content auto-ignored, with the visual difference percentage and a browser-console check.
+5. The Run tab on the WebChange Detector extension page: start a safe-update run across all your enabled sites.
+6. The Checks tab: every run across your sites with filters for date, status, website and detection, plus an AI summary per run.
+7. The Settings tab: activate a website and choose which URLs are checked, separately for desktop and mobile. One click activates checks for all your managed websites.
+8. The Account tab: your plan, remaining checks and active sites, the API token, auto-enable for new sites, and the reset-connection option.
 
 == Changelog ==
 
