@@ -49,6 +49,7 @@ class WCD_MainWP_Ajax {
 			'runs_comparisons',
 			'run_start',
 			'run_status',
+			'run_heartbeat',
 			'run_resume_post',
 			'run_discard',
 		);
@@ -504,7 +505,6 @@ class WCD_MainWP_Ajax {
 				'sites'         => $sites,
 				'checks'        => $checks,
 				'pages'         => $pages,
-				'screenshots'   => $checks * 2,
 				'total_updates' => $total_updates,
 				'enough'        => $enough,
 				// checks_left/enough kept top-level for backward compatibility.
@@ -1012,7 +1012,8 @@ class WCD_MainWP_Ajax {
 			wp_send_json_error( array( 'message' => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		WCD_MainWP_Update_Flow::start_run( $sites );
+		$driver = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
+		WCD_MainWP_Update_Flow::start_run( $sites, $driver );
 		wp_send_json_success( array( 'tracking' => true ) );
 	}
 
@@ -1030,24 +1031,48 @@ class WCD_MainWP_Ajax {
 			wp_send_json_success( array( 'active' => false ) );
 		}
 
-		$missing = WCD_MainWP_Update_Flow::missing_post_sites( $state );
-		$stale   = WCD_MainWP_Update_Flow::run_is_stale( $state );
+		$idle    = WCD_MainWP_Update_Flow::idle_seconds( $state );
+		$updated = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? $state['updated_sites'] : array();
+		$pre     = isset( $state['pre_batches'] ) && is_array( $state['pre_batches'] ) ? $state['pre_batches'] : array();
 
-		// A stale run with nothing to resume (e.g. the tab died during PRE, before any update ran)
-		// is just leftover state: clean it up instead of carrying it forever.
-		if ( $stale && empty( $missing ) ) {
+		// A long-abandoned run that never took a pre screenshot and never installed anything is just
+		// leftover state (e.g. the very first call died): drop it instead of re-opening forever. Any
+		// run with pre screenshots or installed updates stays resumable regardless of age.
+		if ( $idle > WCD_MainWP_Update_Flow::RUN_STALE_AFTER && empty( $updated ) && empty( $pre ) ) {
 			WCD_MainWP_Update_Flow::clear_run();
 			wp_send_json_success( array( 'active' => false ) );
 		}
 
 		wp_send_json_success(
 			array(
-				'active'       => true,
-				'stale'        => $stale,
-				'phase'        => (string) ( $state['phase'] ?? '' ),
-				'missing_post' => $missing,
+				'active'        => true,
+				// Only the page may take over once the heartbeat has gone silent; a fresh heartbeat
+				// means another tab is still driving the run. The driver id lets a same-tab reload
+				// recognise its own run and reclaim it instantly (see checkResume).
+				'resumable'     => $idle >= WCD_MainWP_Update_Flow::RESUME_AFTER,
+				'idle'          => $idle,
+				'driver'        => (string) ( $state['driver'] ?? '' ),
+				'phase'         => (string) ( $state['phase'] ?? 'pre' ),
+				'sites'         => array_values( $state['sites'] ),
+				'pre_batches'   => $pre,
+				'post_batches'  => isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? $state['post_batches'] : array(),
+				'updated_sites' => array_values( array_map( 'intval', $updated ) ),
 			)
 		);
+	}
+
+	/**
+	 * Keep the tracked run's activity timestamp fresh while the driving tab is alive. Called on a
+	 * short interval by the browser (independently of the awaited phase calls), so even a multi-minute
+	 * synchronous update never makes the run look abandoned to another tab.
+	 *
+	 * @return void
+	 */
+	public static function run_heartbeat(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$driver = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
+		WCD_MainWP_Update_Flow::heartbeat( $driver );
+		wp_send_json_success();
 	}
 
 	/**

@@ -11,7 +11,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-$wcd_mainwp_settings_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
+$wcd_mainwp_settings_url = WCD_MainWP_Bootstrap::tab_url( 'account' );
 ?>
 <div class="wcd-hero wcd-hero--setup">
 	<div class="wcd-hero__icon"><i class="eye icon"></i></div>

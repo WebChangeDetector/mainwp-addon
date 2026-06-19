@@ -18,13 +18,12 @@ class WCD_MainWP_Site_Settings {
 
 	const OPTION_KEY = 'wcd_api_token';
 
-	/** Sites-subpage slug of the "Settings" tab next to Visual Checks (page hook ManageSites + slug). */
-	const SUBPAGE_SLUG = 'WcdVisualChecksSettings';
 	// The transients carry the add-on's own prefix: the customer WCD plugin uses a plain
 	// `wcd_account_details` transient, and both plugins can live on the same dashboard site.
 	const ACCOUNT_CACHE   = 'wcd_mainwp_account_details';
 	const ERROR_CACHE     = 'wcd_mainwp_token_error';
 	const VERIFIED_CACHE  = 'wcd_mainwp_token_verified';
+	const RESET_CACHE     = 'wcd_mainwp_token_reset';
 	const ACCOUNT_TTL     = 300; // 5 minutes.
 	const AUTO_ENABLE_KEY = 'wcd_auto_enable_sites';
 
@@ -36,17 +35,18 @@ class WCD_MainWP_Site_Settings {
 	public static function init(): void {
 		add_filter( 'mainwp_getsubpages_sites', array( self::class, 'register_site_tab' ) );
 		add_action( 'admin_post_wcd_save_settings', array( self::class, 'handle_save_settings' ) );
+		add_action( 'admin_post_wcd_reset_token', array( self::class, 'handle_reset_token' ) );
 		// Auto-enable newly added MainWP child sites for WCD (opt-out via the settings toggle).
 		add_action( 'mainwp_added_new_site', array( self::class, 'on_site_added' ), 10, 2 );
 	}
 
 	/**
-	 * Append the WebChange Detector sub-pages to the MainWP sites tabs: the per-site tab and the
-	 * "Settings" page (sites & URL selection), shown next to Visual Checks via the area's own
-	 * tabular menu (WCD_MainWP_Runs_View::render_tabs()).
+	 * Append the per-site WebChange Detector tab to the MainWP sites tabs. The account-wide Settings
+	 * (sites & URL selection) is a tab on the extension page (render_sites_settings_page()), not a
+	 * Sites subpage.
 	 *
 	 * @param array $sub_pages The existing sub-pages.
-	 * @return array The sub-pages with the WCD tabs appended.
+	 * @return array The sub-pages with the per-site WCD tab appended.
 	 */
 	public static function register_site_tab( array $sub_pages ): array {
 		$sub_pages[] = array(
@@ -56,21 +56,13 @@ class WCD_MainWP_Site_Settings {
 			'menu_hidden' => true,
 			'callback'    => array( self::class, 'render_site_tab' ),
 		);
-		$sub_pages[] = array(
-			'title'       => __( 'Settings', 'webchangedetector-for-mainwp' ),
-			'slug'        => self::SUBPAGE_SLUG,
-			'sitetab'     => false,
-			'menu_hidden' => true,
-			// Explicit href so the Sites page navigation never appends a per-site &id=N.
-			'href'        => 'admin.php?page=ManageSites' . self::SUBPAGE_SLUG,
-			'callback'    => array( self::class, 'render_sites_settings_page' ),
-		);
 
 		return $sub_pages;
 	}
 
 	/**
-	 * Render the "Settings" tab of the Visual Checks area (sites & URL selection).
+	 * Render the "Settings" tab body (sites & URL selection) of the extension page. The page shell
+	 * renders the chrome + tab switcher around it.
 	 *
 	 * @return void
 	 */
@@ -258,12 +250,49 @@ class WCD_MainWP_Site_Settings {
 		// settings page does not have to read an (unnonced) $_GET parameter to render its notice.
 		WCD_MainWP_Options::set_transient( self::VERIFIED_CACHE, $flag, 30 );
 
-		wp_safe_redirect(
-			add_query_arg(
-				array( 'page' => WCD_MainWP_Bootstrap::settings_page_slug() ),
-				admin_url( 'admin.php' )
-			)
-		);
+		// Land back on the Account tab so the verification notice + credits card are visible.
+		wp_safe_redirect( WCD_MainWP_Bootstrap::tab_url( 'account' ) );
+		exit;
+	}
+
+	/**
+	 * Disconnect this MainWP dashboard from its WebChange Detector account: forget the API token and
+	 * all local provisioning. This is local only. The WCD account itself (websites, groups,
+	 * comparisons) is left intact, so re-entering the same token re-links to it idempotently
+	 * (find_existing_website avoids duplicates). Sites must be re-enabled afterwards.
+	 *
+	 * @return void
+	 */
+	public static function reset_connection(): void {
+		WCD_MainWP_Options::delete( self::OPTION_KEY );
+		WCD_MainWP_Options::delete_transient( self::ACCOUNT_CACHE );
+		WCD_MainWP_Options::delete_transient( self::ERROR_CACHE );
+		WCD_MainWP_Options::delete_transient( self::VERIFIED_CACHE );
+		// Forget every site's website/group UUIDs + enabled flags, and drop any in-flight safe-update
+		// run (it is meaningless without the account and would otherwise look abandoned/resumable).
+		WCD_MainWP_Site_Map::reset_all();
+		WCD_MainWP_Update_Flow::clear_run();
+	}
+
+	/**
+	 * Handle the Account tab "Reset connection" button (admin-post). Own nonce + capability check,
+	 * then disconnects and lands back on the Account tab with a one-time confirmation notice.
+	 *
+	 * @return void
+	 */
+	public static function handle_reset_token(): void {
+		check_admin_referer( 'wcd_reset_token' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions.', 'webchangedetector-for-mainwp' ) );
+		}
+
+		self::reset_connection();
+
+		// One-time confirmation flag, read once by the Account tab (same transient pattern as the save).
+		WCD_MainWP_Options::set_transient( self::RESET_CACHE, '1', 30 );
+
+		wp_safe_redirect( WCD_MainWP_Bootstrap::tab_url( 'account' ) );
 		exit;
 	}
 

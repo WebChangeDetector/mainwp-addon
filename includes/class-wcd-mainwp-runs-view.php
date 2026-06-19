@@ -1,14 +1,14 @@
 <?php
 /**
- * "Visual Checks" overview page (slug WcdVisualChecks, MainWP page hook ManageSitesWcdVisualChecks).
+ * "Checks" tab of the WebChange Detector extension page: a dashboard-wide list of On-Demand Check
+ * runs (batches).
  *
- * Registered as a MainWP Sites subpage (hidden from the Sites menu) and linked from the left
- * menu's Monitoring category group (see WCD_MainWP_Bootstrap::register_left_menu_item()). A
- * dashboard-wide list of On-Demand Check runs (batches): filter bar (period / status / website /
- * visual), batch + list views, pagination, and an inline comparison table per run. The source is
- * always `manual` (On-Demand): runs created elsewhere on the account (monitoring, auto-update via
- * the webapp) are out of scope here. Data comes from the WCD API (/batches + /comparisons); the
- * markup/AJAX live here, the styles in assets/css/wcd-runs.css.
+ * Rendered as a tab on the add-on's extension page (Extensions -> WebChange Detector); the page
+ * shell (templates/admin-page.php) supplies the MainWP chrome + tab switcher. Filter bar (period /
+ * status / website / visual), batch + list views, pagination, and an inline comparison table per
+ * run. The source is always `manual` (On-Demand): runs created elsewhere on the account (monitoring,
+ * auto-update via the webapp) are out of scope here. Data comes from the WCD API (/batches +
+ * /comparisons); the markup/AJAX live here, the styles (scoped to .wcd-runs) in assets/css/wcd-mainwp.css.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -16,90 +16,25 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders the account-wide "Visual Checks" overview page and its filter/run helpers.
+ * Renders the account-wide "Checks" tab, the "Run" tab and the shared tab switcher + filter helpers.
  */
 class WCD_MainWP_Runs_View {
 
-	const PAGE_SLUG = 'WcdVisualChecks';
-	const PER_PAGE  = 20;
+	const PER_PAGE = 20;
 
 	/**
-	 * Hook the page registration into MainWP's Sites submenu filter.
+	 * Render the "Run" tab body (the safe-update entry point). The page shell renders the chrome +
+	 * tab switcher around it.
 	 *
 	 * @return void
 	 */
-	public static function init(): void {
-		add_filter( 'mainwp_getsubpages_sites', array( self::class, 'register_page' ) );
-		// menu_hidden only hides the Sites LEFT-menu entry; the Sites page-navigation tabs ignore
-		// it, so we filter our tab out of every Sites page except our own (same pattern as
-		// MainWP's own Password Policy page).
-		add_filter( 'mainwp_manage_sites_navigation_items', array( self::class, 'filter_navigation_items' ), 10, 3 );
+	public static function render_run_page(): void {
+		include WCD_MAINWP_PLUGIN_PATH . 'templates/run-view.php';
 	}
 
 	/**
-	 * Keep our entries out of the Sites page navigation. The navigation column is only VISIBLE on
-	 * per-site views in MainWP 6 (display:none elsewhere), and there our account-wide pages would
-	 * just confuse; on our own pages the filter is a practical no-op (column hidden). The visible
-	 * Visual Checks | Settings switcher is render_tabs(), not this navigation.
-	 *
-	 * @param mixed  $items      Navigation items (title, href, active).
-	 * @param int    $site_id    Current site id (0 on overview pages).
-	 * @param string $shown_page Current subpage slug.
-	 * @return array Filtered navigation items.
-	 */
-	public static function filter_navigation_items( $items, $site_id = 0, $shown_page = '' ): array {
-		if ( ! is_array( $items ) ) {
-			return array();
-		}
-
-		$our_slugs = array( self::PAGE_SLUG, WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
-		$on_ours   = in_array( (string) $shown_page, $our_slugs, true );
-
-		$is_ours = static function ( $item ) use ( $our_slugs ) {
-			$href = is_array( $item ) ? (string) ( $item['href'] ?? '' ) : '';
-			foreach ( $our_slugs as $slug ) {
-				// Exact page match: the Settings slug shares the Visual Checks slug as prefix.
-				if ( preg_match( '/page=ManageSites' . preg_quote( $slug, '/' ) . '($|&)/', $href ) ) {
-					return true;
-				}
-			}
-
-			return false;
-		};
-
-		return array_values(
-			array_filter(
-				$items,
-				static function ( $item ) use ( $is_ours, $on_ours ) {
-					return $on_ours ? $is_ours( $item ) : ! $is_ours( $item );
-				}
-			)
-		);
-	}
-
-	/**
-	 * Register the page as a Sites subpage. menu_hidden keeps it out of the Sites menu group; its
-	 * left-menu entry lives in the Monitoring category instead (registered by the bootstrap).
-	 *
-	 * @param array $sub_pages Existing MainWP Sites subpages.
-	 * @return array Subpages with the Visual Checks entry appended.
-	 */
-	public static function register_page( array $sub_pages ): array {
-		$sub_pages[] = array(
-			'title'       => __( 'WebChange Detector', 'webchangedetector-for-mainwp' ),
-			'slug'        => self::PAGE_SLUG,
-			'sitetab'     => false,
-			'menu_hidden' => true,
-			// Explicit href so the Sites page navigation never appends a per-site &id=N.
-			'href'        => 'admin.php?page=ManageSites' . self::PAGE_SLUG,
-			'callback'    => array( self::class, 'render_page' ),
-		);
-
-		return $sub_pages;
-	}
-
-	/**
-	 * Render the page by including its template.
+	 * Render the "Checks" tab body (the runs list). The page shell renders the chrome + tab switcher
+	 * around it.
 	 *
 	 * @return void
 	 */
@@ -108,29 +43,44 @@ class WCD_MainWP_Runs_View {
 	}
 
 	/**
-	 * Echo the Visual Checks area's tab switcher: a native Fomantic "top attached tabular menu"
-	 * (the same element MainWP's own modules use for in-page tabs; the Sites page-navigation
-	 * column is display:none on non-per-site pages in MainWP 6, so it cannot serve as the
-	 * switcher here). The content below should use an "attached segment" to dock onto the tabs.
+	 * Echo the extension page's tab switcher: MainWP's native sub-navigation bar as a Fomantic
+	 * "ui labeled icon inverted menu mainwp-sub-submenu" (the exact class list the SeoPress MainWP
+	 * add-on uses), so each item shows an icon above its label (Run, Checks, Settings, Account). The
+	 * `inverted` class is mandatory: the MainWP theme scopes the readable white labels/icons and the
+	 * accent-colored active-tab highlight to `.ui.inverted.menu.mainwp-sub-submenu`; the bare class
+	 * only paints the dark background. The four tabs all live on the single extension page and switch
+	 * via a ?tab= reload (WCD_MainWP_Bootstrap::tab_url()). Because the bar is free-standing (not
+	 * "top attached"), the tab body below uses a plain "ui padded segment" (not "bottom attached").
 	 *
-	 * @param string $active Active tab: 'checks' or 'settings'.
+	 * @param string $active Active tab: 'run', 'checks', 'settings' or 'account'.
 	 * @return void
 	 */
 	public static function render_tabs( string $active ): void {
 		$tabs = array(
+			'run'      => array(
+				'icon'  => 'play',
+				'label' => __( 'Run', 'webchangedetector-for-mainwp' ),
+			),
 			'checks'   => array(
-				'href'  => admin_url( 'admin.php?page=ManageSites' . self::PAGE_SLUG ),
+				'icon'  => 'history',
 				'label' => __( 'Checks', 'webchangedetector-for-mainwp' ),
 			),
 			'settings' => array(
-				'href'  => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG ),
+				'icon'  => 'cog',
 				'label' => __( 'Settings', 'webchangedetector-for-mainwp' ),
+			),
+			'account'  => array(
+				'icon'  => 'user',
+				'label' => __( 'Account', 'webchangedetector-for-mainwp' ),
 			),
 		);
 		?>
-		<div class="ui top attached tabular menu wcd-vc-tabs">
-			<?php foreach ( $tabs as $key => $tab ) : ?>
-				<a class="item<?php echo $key === $active ? ' active' : ''; ?>" href="<?php echo esc_url( $tab['href'] ); ?>"><?php echo esc_html( $tab['label'] ); ?></a>
+		<div class="ui labeled icon inverted menu mainwp-sub-submenu">
+			<?php foreach ( $tabs as $wcd_mainwp_key => $wcd_mainwp_tab ) : ?>
+				<a class="item<?php echo $wcd_mainwp_key === $active ? ' active' : ''; ?>" href="<?php echo esc_url( WCD_MainWP_Bootstrap::tab_url( $wcd_mainwp_key ) ); ?>">
+					<i class="<?php echo esc_attr( $wcd_mainwp_tab['icon'] ); ?> icon"></i>
+					<?php echo esc_html( $wcd_mainwp_tab['label'] ); ?>
+				</a>
 			<?php endforeach; ?>
 		</div>
 		<?php
@@ -476,7 +426,7 @@ class WCD_MainWP_Runs_View {
 			<?php if ( $with_run ) : ?>
 				<td><?php echo esc_html( self::display_batch_name( $c['batch_name'] ?? '' ) ); ?></td>
 			<?php endif; ?>
-			<td>
+			<td class="wcd-col-url">
 				<span class="<?php echo esc_attr( self::device_icon_class( $device ) ); ?>"></span>
 				<span class="wcd-url-link"><?php echo esc_html( $title ? $title : $url ); ?></span>
 				<?php
@@ -603,34 +553,6 @@ class WCD_MainWP_Runs_View {
 		$name = (string) $name;
 
 		return 'Manual Checks' === trim( $name ) ? __( 'On-Demand Checks', 'webchangedetector-for-mainwp' ) : $name;
-	}
-
-	/**
-	 * Period pill label from a date range (mirrors the webapp's wcd_period_label, dash-free).
-	 *
-	 * @param string $from Range start date string (may be empty).
-	 * @param string $to   Range end date string (may be empty).
-	 * @return string Period label.
-	 */
-	public static function period_label( string $from, string $to ): string {
-		if ( '' === $from && '' === $to ) {
-			return __( 'All time', 'webchangedetector-for-mainwp' );
-		}
-		if ( '' === $from || '' === $to ) {
-			return __( 'Custom range', 'webchangedetector-for-mainwp' );
-		}
-
-		if ( gmdate( 'Y-m-d' ) === $to ) {
-			$diff_days = (int) round( ( strtotime( $to ) - strtotime( $from ) ) / DAY_IN_SECONDS );
-			foreach ( array( 7, 30, 90 ) as $preset ) {
-				if ( abs( $diff_days - $preset ) <= 1 ) {
-					/* translators: %d: number of days. */
-					return sprintf( __( 'Last %d days', 'webchangedetector-for-mainwp' ), $preset );
-				}
-			}
-		}
-
-		return gmdate( 'd.m.Y', strtotime( $from ) ) . ' to ' . gmdate( 'd.m.Y', strtotime( $to ) );
 	}
 
 	/**

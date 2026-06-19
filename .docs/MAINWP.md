@@ -49,7 +49,7 @@ webchangedetector-for-mainwp/
 ├── .distignore                    # Files excluded from the wp.org distribution
 │   # Class files follow the WordPress convention class-{lowercased-class-name}.php.
 ├── includes/
-│   ├── class-wcd-mainwp-bootstrap.php      # Wires MainWP hooks, enqueues assets, injects entry points, left-menu item
+│   ├── class-wcd-mainwp-bootstrap.php      # Wires MainWP hooks, enqueues assets, injects entry points, extension-page tab router (render_admin_page + tab_url)
 │   ├── class-wcd-mainwp-options.php        # Network-aware option/transient storage
 │   ├── class-wcd-mainwp-api.php            # WCD API v2 HTTP client (normalized results)
 │   ├── class-wcd-mainwp-site-map.php       # MainWP site <-> WCD website/group mapping + domain normalization
@@ -58,18 +58,18 @@ webchangedetector-for-mainwp/
 │   ├── class-wcd-mainwp-cache-purge.php    # Child-site cache purge via mainwp_fetchurlauthed + cache_purge_action
 │   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + after-update hook safety-net + pending-update counts
 │   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview)
-│   ├── class-wcd-mainwp-runs-view.php      # "Visual Checks" overview page (filters + batch/list rendering)
-│   └── class-wcd-mainwp-widget.php         # Dashboard widget (plan/credits/renewal/active sites)
+│   ├── class-wcd-mainwp-runs-view.php      # Renders the Run + Checks tab bodies, the extension-page tab switcher (render_tabs), filters + batch/list rendering
+│   └── class-wcd-mainwp-widget.php         # The Safe Update dashboard widget (entry point) + its Visual Checks "Run" tab panel
 ├── templates/
-│   ├── admin-page.php             # Extension settings page shell
-│   ├── settings-page.php          # Token + auto-enable toggle + account/credits card (sites/URLs moved to the Settings tab)
+│   ├── admin-page.php             # Extension page shell: resolves ?tab=, renders the tab switcher + the active tab body
+│   ├── settings-page.php          # Account tab body: token + auto-enable toggle + account/credits card
 │   ├── site-tab.php               # Per-site tab: status + safe-update entry (disabled when no updates)
-│   ├── entry-banner.php           # Hero banner (dashboard + child-site overview + Updates page) -> safe-update flow
-│   ├── runs-view.php              # Visual Checks overview shell (native MainWP chrome + Fomantic filter bar)
-│   ├── sites-settings-page.php    # Visual Checks "Settings" tab: enable sites + URL selection
-│   └── widget.php                 # Dashboard widget body
-├── assets/css/wcd-mainwp.css      # Component styles (+ .wcd-w-* width steps, no inline CSS)
-├── assets/css/wcd-runs.css        # Visual Checks overview styles (scoped to .wcd-runs)
+│   ├── widget-safe-update.php     # Safe-update dashboard widget body (native MainWP chrome) -> safe-update flow
+│   ├── entry-banner.php           # Hero banner (native Updates page only) -> safe-update flow
+│   ├── runs-view.php              # Checks tab body (Fomantic filter bar; chrome + tabs from the page shell)
+│   ├── run-view.php               # Run tab body -> safe-update widget body (full-page panel)
+│   └── sites-settings-page.php    # Settings tab body: enable sites + URL selection
+├── assets/css/wcd-mainwp.css      # All component styles (+ .wcd-w-* width steps + the Checks-tab styles scoped to .wcd-runs, no inline CSS)
 └── assets/js/wcd-mainwp.js        # Settings + safe-update orchestrator + results + runs overview
 ```
 
@@ -79,16 +79,15 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 
 | Hook | Purpose |
 |------|---------|
-| `mainwp_getextensions` | Register extension + settings page + icon |
-| `mainwp_getsubpages_sites` | Per-site tab `WcdVisualRegressionTesting` + the "Visual Checks" page `WcdVisualChecks` + its "Settings" tab `WcdVisualChecksSettings` (both menu_hidden) |
-| `mainwp_menu_extensions_left_menu` | Places the "Visual Checks" entry inside the left menu's Monitoring category group |
-| `mainwp_getmetaboxes` | Dashboard widget `wcd-checks-widget` (plan, credits bar, renewal countdown, active sites, quick links) |
+| `mainwp_getextensions` | Register extension + the extension page (Run/Checks/Settings/Account tabs) + icon |
+| `mainwp_getsubpages_sites` | Per-site tab `WcdVisualRegressionTesting` only (menu_hidden). Run/Checks/Settings/Account are tabs on the extension page, not Sites subpages |
+| `mainwp_getmetaboxes` | The Safe Update dashboard widget `wcd-safe-update-widget` (safe-update entry point, full-width, draggable/hideable). Account data (plan, credits, renewal, active sites) lives on the extension page's Account tab, not in a dashboard widget |
+| `mainwp_widgets_screen_options` | Adds the Safe Update widget (`advanced-wcd-safe-update-widget`) to MainWP's "Page Settings" show/hide list so the user can hide it (default shown) |
 | `mainwp_getdbsites` / `mainwp_extension_enabled_check` | List managed sites + the extension key |
 | `mainwp_site_synced` | After a child syncs -> sync its URLs to the WCD group |
 | `mainwp_added_new_site` | Auto-enable a newly added child site for WCD (opt-out via the settings toggle) |
 | `mainwp_getallposts` | Fetch a child's posts (pages use the guarded call) |
-| `mainwp_before_overview_widgets` | Render the WCD hero banner (Operations dashboard = bulk; child-site overview = single site) |
-| `mainwp_updates_before_plugin_updates` | Render the same hero banner above the native Updates page's plugin list (only when updates are available) |
+| `mainwp_updates_before_plugin_updates` | Render the WCD hero banner above the native Updates page's plugin list (only when updates are available; the Updates page is not a widget grid, so a banner is the closest fit there) |
 | `mainwp_after_wp_update` / `mainwp_after_plugin_theme_translation_update` | Post screenshots (recovery + non-card coverage) |
 
 ## Settings & Storage
@@ -105,6 +104,12 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 - Auto-enable option: **`wcd_auto_enable_sites`** (`'1'`/`'0'`, default ON). When on, the
   `mainwp_added_new_site` hook auto-provisions + enables each newly added child site (and syncs its
   URLs). Each enabled site provisions WCD resources that count against the plan, hence the opt-out.
+- Reset connection: the Account tab "Reset connection" button (`admin_post_wcd_reset_token`, own
+  nonce) calls `WCD_MainWP_Site_Settings::reset_connection()`, which clears the token, the account
+  cache + verify/error transients, the whole site map (`reset_all()`) and any in-flight run
+  (`clear_run()`). It is **local only**: WCD websites/groups/comparisons are left intact, so
+  re-entering the same token re-links to them idempotently (`find_existing_website`). The auto-enable
+  preference is intentionally kept (it is a UI setting, not account data).
 
 ## API Communication
 
@@ -125,11 +130,16 @@ Vocabulary: data-model terms (`manual`/`monitoring`, `source=manual`) in API cal
 
 ## Safe-Update Flow (confirm popup + unified in-card run, phased)
 
-Entry: the WCD hero banner (`mainwp_before_overview_widgets`), shown at the top of the Operations
-dashboard (bulk: all enabled sites) and an individual child-site overview (single site). We drive the
-flow from our own button because no hook can trigger updates and the before-update hook can't await
-async screenshots. The banner's Pages/Checks load progressively via the `banner_stats` AJAX so the
-dashboard never blocks on WCD API calls.
+Entry: the **"Safe Update" dashboard widget** (`mainwp_getmetaboxes`, callback
+`WCD_MainWP_Widget::render_safe_update_metabox`), a draggable/hideable full-width metabox on the
+Operations dashboard (bulk: all enabled sites) and an individual child-site overview (single site).
+The same flow also launches from the hero banner above the native Updates page's plugin list
+(`mainwp_updates_before_plugin_updates`; the Updates page is not a widget grid). We drive the flow
+from our own button because no hook can trigger updates and the before-update hook can't await async
+screenshots. Both surfaces share the same JS contract (`.wcd-safe-update` CTA, `.wcd-run-host`,
+`[data-stats-scope]` + `[data-role=pages|checks]`); their Pages/Checks load progressively via the
+`banner_stats` AJAX so the dashboard never blocks on WCD API calls. Scope (bulk vs. single site) is
+resolved by `WCD_MainWP_Bootstrap::resolve_banner_scope()`, shared by the widget and the banner.
 
 **The run only covers sites with pending updates.** The `preflight` AJAX flags every scope site
 with `has_updates` (additive field; read from MainWP's own DB upgrade columns) and computes ALL
@@ -147,7 +157,7 @@ Pages/Checks over the eligible sites only. `pending_updates_by_site()` is the pe
 the banner + `banner_stats`; `pending_updates_count()` derives its total from it; `preflight()`
 reads the same upgrade columns via `update_items_for_site()` (it needs the item list anyway).
 
-Because the entry point is already "Run visual check & update", there is no with/without choice: the
+Because the entry point is already "Run visual checks & updates", there is no with/without choice: the
 button opens the **preflight popup, which is confirm-only**. The preflight renders the full run
 overview from the enriched `preflight` AJAX payload: a Sites / Pages / Screenshots / Checks summary
 strip, a **credit-coverage** bar (this run uses N checks · M of L available; "Enough credits" /
@@ -159,9 +169,18 @@ selected counts from the group-urls `meta` (per_page=1, like `banner_stats`), an
 many websites (mirrors the webapp's lazy website accordion). The API still enforces credit limits
 server-side (returns 402).
 
-On confirm the popup closes and the **whole run plays out in ONE unified card rendered inline on the
-page** (the `.wcd-run-host` container right below the launch band; no running modal). The browser is
-the scheduler and orchestrates the phases as **barriers** so every site advances together:
+On confirm the preflight is replaced **in the same modal** by the **unified run card**: the run plays
+out **in a popup** (the run card is mounted into the Fomantic modal body, not inline in the page).
+While the run is in flight the popup cannot be closed (the close is vetoed in `mayCloseModal` and a
+**keep-open warning** is shown), so the orchestrating tab is not closed by accident; navigating away
+cannot be prevented but is recovered by the resume path. The native Fomantic close icon is hidden in
+the run popup at all times; the card's OWN dismiss is the single close and only appears once the run
+finishes (so the done modal never shows two close icons). A **"Updates running" button** next to the
+widget heading (`.wcd-run-reopen-slot`; on the Updates banner it falls back into the `.wcd-run-host`)
+**reopens** the popup, which is the only way back in, so a resumed run (which does NOT auto-open) is
+reached through it. When the run finishes the warning clears, the card's own dismiss appears (clears
+the run), and the reopen button shows the verdict. The
+browser is the scheduler and orchestrates the phases as **barriers** so every site advances together:
 
 1. **PRE**: ONE `take_pre` call with all check-enabled sites -> **purge each site's child cache**
    (synchronous, best effort) -> dispatch the pre batches -> poll all batches aggregated until done.
@@ -216,49 +235,104 @@ credit bar) use the `.wcd-w-*` step utilities, never inline styles.
 Post-only (no reliable pre in a synchronous before-hook). Purges the site's child cache (behind the
 same dedupe) right before enqueuing the post screenshots.
 
-**Run-state persistence + resume**: because the browser orchestrates the run, every phase transition
-is also persisted server-side in the `wcd_mainwp_active_run` option (`WCD_MainWP_Update_Flow`
-run-state section): `run_start` (sites + per-site name/checks), `take_pre`/`take_post` record their
-batches, `run_update` records completed sites, `poll` bumps the activity timestamp. Once every run
-site has a post batch the state clears (the rest finishes server-side). If a page later loads while
-a run has installed updates but misses post batches AND has been inactive for 10+ minutes
-(RUN_STALE_AFTER), the JS (`checkResume`) shows a warning message in the run host with two actions:
-**Take post-update screenshots** (`run_resume_post` dispatches the missing post batches server-side,
-clears the state, and the unified card resumes at the POST phase) or **Discard** (`run_discard`).
-So a closed tab between updates and post screenshots no longer loses the run.
+**Run-state persistence + auto-resume (any phase)**: because the browser orchestrates the run, every
+phase transition is persisted server-side in the `wcd_mainwp_active_run` option
+(`WCD_MainWP_Update_Flow` run-state section): `run_start` (sites + per-site name/checks),
+`take_pre`/`take_post` record their batches, `run_update` records completed sites, `poll` bumps the
+activity timestamp. In addition the driving tab sends a short, **unthrottled heartbeat**
+(`run_heartbeat`, ~7s, carrying a per-tab **driver id** kept in `sessionStorage`) so even a
+multi-minute synchronous update never makes the run look abandoned, and the run records which tab
+drives it. On any page that hosts the entry point, `checkResume` calls `run_status` on load and takes
+over **instantly** when the run's `driver` matches this tab's id (a same-tab reload or navigation
+reclaiming its OWN run; no other tab can be driving it) or when the heartbeat has been silent for
+`RESUME_AFTER` (20s). The run is then **resumed in the background** (it continues at its persisted
+`phase` but the popup does NOT auto-open; the user opens it via the "Updates running" button: PRE
+re-takes only the still-missing pre screenshots then polls; UPDATES finishes the not-yet-updated sites;
+POST uses `run_resume_post`, which re-purges and dispatches the missing post batches). If neither holds
+(a foreign, still-fresh driver, so another tab is likely driving it), the page shows the "Updates
+running" button + locks the CTA **immediately** so the user cannot start a second run, and re-checks
+after a short window (`RESUME_RECHECK`) until it may take over; clicking the button takes over there and
+then. Once every run site has a post batch the state clears (the rest finishes server-side); a
+long-idle run that never took a pre screenshot and never installed anything is dropped as leftover
+(`RUN_STALE_AFTER`). So navigating away from the Operations page (or a closed tab) no longer loses the
+run.
 
-Closing the page does NOT abort the flow (the AJAX chains/updates keep running server-side);
-`beforeunload` warns before a tab close while a run is active, the card's footer says to keep the
-tab open, and the card's dismiss (X) is disabled until the run finishes.
+While a run is in flight the popup cannot be closed (close vetoed + keep-open warning), so it stays the
+visible scheduler. Navigating away cannot be prevented, but is recoverable (the run resumes on return,
+opened via the "Updates running" button); `beforeunload` still warns before a tab close while a run is
+active because navigating away mid-UPDATES can interrupt a non-transactional update in flight.
 
 ## Entry points
 
-- **Hero banner** (`templates/entry-banner.php`, shared `renderScopedBanner()`): the safe-update entry,
-  rendered on the Operations dashboard (bulk), an individual child-site overview (single site), AND
-  above the native Updates page's plugin list (`mainwp_updates_before_plugin_updates`, only when
-  updates are available). The CTA is disabled when there are no pending updates (the per-site tab
-  button too); the unknown count (MainWP DB unavailable) leaves it enabled.
+- **Safe Update widget** (`templates/widget-safe-update.php`, callback
+  `WCD_MainWP_Widget::render_safe_update_metabox`): the primary safe-update entry, a native MainWP
+  dashboard widget registered via `mainwp_getmetaboxes` with `layout => [0,20,12,10]` (full width, y=20
+  so it defaults directly below MainWP's Updates Overview widget, which occupies `[0,0,12,20]`; on
+  surfaces without that widget MainWP's grid compacts it upward). Its markup mirrors MainWP's own
+  Recent Activity widget so the footer actions stay visible at ANY widget height: a **title-only**
+  `mainwp-widget-header` (a flex row whose `.wcd-run-reopen-slot` holds the "Updates running" reopen
+  button while a run popup is closed), then the three `mainwp-cards` stats inside the flex-grow
+  `mainwp-scrolly-overflow` middle (the stats sit in the `[data-stats-scope]` container the
+  `banner_stats` AJAX reads), then a native two-column `mainwp-widget-footer` with the Settings link + the green
+  Run CTA (`ui green button`, matching MainWP's own update buttons). Keeping the bulky cards out of the
+  fixed header is what lets the scroll area shrink/scroll (and the footer stay pinned) when the widget
+  is resized short, instead of the footer being clipped by the `overflow:hidden` widget. It is
+  **draggable** (the `handle-drag`
+  title) and **hideable** (registered in `mainwp_widgets_screen_options`). MainWP renders our
+  metaboxes on both the Operations dashboard (bulk) and the individual child-site overview (single
+  site, scope-aware via `get_current_wpid()`). The no-token state reuses
+  `templates/entry-banner-no-token.php`.
+- **Run tab** (`templates/run-view.php`, callback `WCD_MainWP_Widget::render_safe_update_panel`): the
+  same widget body rendered as a full-page panel on the extension page's **Run** tab (the default tab
+  once a token is configured). On this account-wide page `get_current_wpid()` is 0, so the
+  scope resolves to **bulk** over all enabled sites. The panel method owns the branching the metabox
+  chrome does not: no token -> an info notice linking to the Account tab; no enabled sites ->
+  an info notice linking to the Settings tab; otherwise the shared `widget-safe-update.php` body. It
+  is wrapped in a `ui bottom attached segment` (not a `.mainwp-widget`), so MainWP's
+  `.mainwp-widget`-scoped paddings do not apply; a small `.wcd-run-tab` rule restores the spacing.
+- **Hero banner** (`templates/entry-banner.php`, shared `render_scoped_banner()`): the same flow above
+  the native Updates page's plugin list (`mainwp_updates_before_plugin_updates`, only when updates are
+  available). The Updates page is not a widget grid, so a banner is the closest fit there.
+- The CTA is disabled when there are no pending updates (the per-site tab button too); the unknown
+  count (MainWP DB unavailable) leaves it enabled.
 
-## Visual Checks overview
+## Extension page tabs (Run / Checks / Settings / Account)
 
-`class-wcd-mainwp-runs-view.php` + `templates/runs-view.php` + `assets/css/wcd-runs.css`: a
-dashboard-wide list of On-Demand runs (batches). Registered as a Sites subpage (slug
-`WcdVisualChecks`, `sitetab => false`, `menu_hidden => true`) and linked from the left menu's
-**Monitoring** category group via `mainwp_menu_extensions_left_menu` (bootstrap). The template wraps
-itself in the native MainWP chrome (`mainwp_pageheader_sites` / `mainwp_pagefooter_sites`).
+The whole UI lives on the add-on's own **extension page** (MainWP > Extensions > WebChange Detector).
+`templates/admin-page.php` is the shell: it resolves the active tab from the `?tab=` query arg
+(`run` / `checks` / `settings` / `account`; default = **Account** when no token is configured, else
+**Run**), renders the MainWP extension chrome once (`mainwp_pageheader_extensions` /
+`mainwp_pagefooter_extensions`), draws the tab switcher (`WCD_MainWP_Runs_View::render_tabs()`), and
+dispatches to the active tab body. Tabs switch via a **full page reload** (`?tab=...`); URLs are built
+by `WCD_MainWP_Bootstrap::tab_url()`. The full reload keeps the Run-tab safe-update resume/heartbeat
+contract working on a fresh load.
 
-The Visual Checks area has TWO tabs: **Visual Checks** (runs) and **Settings** (slug
-`WcdVisualChecksSettings`, registered by `WCD_MainWP_Site_Settings`, template
-`sites-settings-page.php`) with the per-site enable toggles + URL selection that used to live on
-the extension settings page. The visible switcher is a native Fomantic **`ui top attached tabular
-menu`** (`WCD_MainWP_Runs_View::render_tabs()`, the same element MainWP's own modules use for
-in-page tabs) with the content in a `bottom attached segment`. NOTE: MainWP 6's Sites
-page-navigation column (`#mainwp-page-navigation-wrapper`) is `display:none` on non-per-site pages
-(only `.mainwp-individual-site-view` shows it), so it CANNOT serve as the switcher here;
-`WCD_MainWP_Runs_View::filter_navigation_items` (`mainwp_manage_sites_navigation_items`) still
-runs to keep our entries out of the per-site navigation, where the column IS visible. The
-extension page (MainWP > Extensions > WebChange Detector) keeps the account-level settings (API
-token, auto-enable, credits card) and links to the Settings tab.
+The four tab bodies:
+- **Run** (`render_run_page` -> `run-view.php`): the safe-update entry-point panel (bulk scope).
+- **Checks** (`render_page` -> `runs-view.php`): the On-Demand runs list (see below).
+- **Settings** (`WCD_MainWP_Site_Settings::render_sites_settings_page` -> `sites-settings-page.php`):
+  per-site enable toggles + URL selection.
+- **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): API token,
+  auto-enable toggle, plan/credits card. Saving the token redirects back to this tab.
+
+The switcher is MainWP's **native sub-navigation bar** rendered as a Fomantic
+**`ui labeled icon inverted menu mainwp-sub-submenu`** (the exact class list the SeoPress MainWP
+add-on uses), so each tab shows its **icon over the label** (Run / Checks / Settings / Account). The
+**`inverted` class is mandatory**: MainWP's theme scopes the readable white labels/icons and the
+accent-colored active-tab highlight to `.ui.inverted.menu.mainwp-sub-submenu`, whereas the bare
+`.mainwp-sub-submenu` only paints the dark background (dropping `inverted` gives dark-on-dark,
+unreadable labels and no visible active state). `labeled icon` stacks the icon over the label
+natively, so the switcher carries **no custom tab CSS** and none should be added (it would fight the
+theme). Because the bar is free-standing (not `top attached`), each tab body is a plain
+**`ui padded segment`** (not `bottom attached`). There is
+**no** left-menu entry and there are **no** account-wide Sites subpages: everything is reached
+through the Extensions menu. (Only the per-site `WcdVisualRegressionTesting` tab remains a Sites
+subpage; it links back to the Account/Settings tabs.)
+
+### Checks tab (runs list)
+
+`class-wcd-mainwp-runs-view.php` + `templates/runs-view.php` + the `.wcd-runs`-scoped styles in
+`assets/css/wcd-mainwp.css`: the **Checks** tab is a dashboard-wide list of On-Demand runs (batches).
 
 The **source is fixed to `manual` server-side** (`build_api_filters`): only On-Demand Checks appear;
 the account's monitoring/auto-update runs made elsewhere (webapp) are out of scope, so there is no
@@ -286,7 +360,7 @@ MainWP theme, so light/dark both work.
   `$_POST`, so the read genuinely cannot happen without a valid nonce (defense in depth). Handlers that
   read `$_POST` directly (e.g. `take_screenshot()`'s `site_ids[]`, `poll()`'s batches) do so only after
   their inline `check_ajax_referer` call.
-- `admin_post_wcd_save_settings` verifies its nonce + capability.
+- `admin_post_wcd_save_settings` and `admin_post_wcd_reset_token` each verify their own nonce + capability.
 - Input sanitized; output escaped; URLs via `esc_url`.
 
 ## Coding standards

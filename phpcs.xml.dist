@@ -52,6 +52,7 @@
 		<exclude-pattern>*/templates/admin-page.php</exclude-pattern>
 		<exclude-pattern>*/templates/site-tab.php</exclude-pattern>
 		<exclude-pattern>*/templates/runs-view.php</exclude-pattern>
+		<exclude-pattern>*/templates/run-view.php</exclude-pattern>
 		<exclude-pattern>*/templates/sites-settings-page.php</exclude-pattern>
 	</rule>
 </ruleset>

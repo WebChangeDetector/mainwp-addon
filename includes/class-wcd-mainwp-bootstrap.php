@@ -55,14 +55,10 @@ class WCD_MainWP_Bootstrap {
 
 		add_filter( 'mainwp_getextensions', array( self::class, 'register_extension' ) );
 		add_filter( 'mainwp_getmetaboxes', array( self::class, 'register_widget' ) );
+		add_filter( 'mainwp_widgets_screen_options', array( self::class, 'register_widget_screen_options' ) );
 
-		// The "Visual Checks" page lives in the left menu's Monitoring category group. This is the
-		// documented MainWP filter for placing a third-party page inside a category group.
-		add_filter( 'mainwp_menu_extensions_left_menu', array( self::class, 'register_left_menu_item' ) );
-
-		// Runs view first: the page navigation preserves subpage registration order, and the
-		// Visual Checks tab leads the area (Settings second).
-		WCD_MainWP_Runs_View::init();
+		// Run, Checks, Settings and Account are tabs on this add-on's own extension page (see
+		// render_admin_page()); Site_Settings still registers the per-site tab on the Sites pages.
 		WCD_MainWP_Site_Settings::init();
 		WCD_MainWP_Url_Sync::init();
 		WCD_MainWP_Update_Flow::init();
@@ -70,13 +66,13 @@ class WCD_MainWP_Bootstrap {
 
 		add_action( 'admin_enqueue_scripts', array( self::class, 'enqueue_assets' ) );
 
-		// Single, prominent entry point: the hero banner at the top of the dashboard body. The same
-		// hook fires on the Operations dashboard (bulk) and an individual child-site overview
-		// (single site); we detect the scope inside the callback.
-		add_action( 'mainwp_before_overview_widgets', array( self::class, 'render_overview_banner' ) );
+		// The safe-update entry point on the Operations dashboard and individual child-site overview
+		// is the draggable "Safe Update" metabox widget (register_widget()); MainWP renders our
+		// metaboxes on both surfaces. The hero banner stays only on the native Updates page below.
 
-		// Second entry point: the same hero banner above the native Updates page's plugin list,
-		// shown only when plugin updates are available (the hook passes the total count).
+		// Updates-page entry point: the hero banner above the native Updates page's plugin list,
+		// shown only when plugin updates are available (the hook passes the total count). The Updates
+		// page is not a widget grid, so a banner is the closest fit there.
 		add_action( 'mainwp_updates_before_plugin_updates', array( self::class, 'render_updates_plugin_banner' ), 10, 2 );
 	}
 
@@ -101,52 +97,52 @@ class WCD_MainWP_Bootstrap {
 	}
 
 	/**
-	 * Add the "Visual Checks" entry to the left menu's Monitoring category group.
-	 *
-	 * The page itself is registered as a Sites subpage (see WCD_MainWP_Runs_View) but hidden from
-	 * the Sites menu; this filter places its menu entry inside the Monitoring group instead, where
-	 * visual checks sit naturally next to MainWP's own uptime monitoring.
-	 *
-	 * @param array $items Left-menu items registered by extensions.
-	 * @return array Items with the Visual Checks entry appended.
-	 */
-	public static function register_left_menu_item( $items ): array {
-		$items   = is_array( $items ) ? $items : array();
-		$page    = 'ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG;
-		$items[] = array(
-			'title'                => esc_html__( 'WebChange Detector', 'webchangedetector-for-mainwp' ),
-			'parent_key'           => 'Extensions-Mainwp-Monitoring',
-			'slug'                 => $page,
-			'href'                 => 'admin.php?page=' . $page,
-			'level'                => 2,
-			'leftsub_order_level2' => 5,
-			// Highlights the Sites bar icon + opens the Monitoring group while on our page.
-			'active_path'          => array( $page => 'managesites' ),
-		);
-
-		return $items;
-	}
-
-	/**
 	 * Register the dashboard widget with MainWP's metaboxes list.
 	 *
 	 * @param array $metaboxes Registered MainWP metaboxes.
 	 * @return array Metaboxes list with this add-on's widget appended.
 	 */
 	public static function register_widget( array $metaboxes ): array {
+		// Safe-update entry point: a draggable/hideable full-width card on the dashboard grid. It
+		// replaces the old hero banner on the Operations dashboard and the individual child-site
+		// overview (both surfaces render the dashboard metaboxes). The default layout places it
+		// full-width directly below MainWP's Updates Overview widget (registered at y=0, h=20 in
+		// page-mainwp-overview.php), so safe updates sit right under the update list; on surfaces
+		// without that widget MainWP's grid compacts it upward. Users can move/resize/hide it like any
+		// MainWP widget, and the inline run card scrolls within it.
 		$metaboxes[] = array(
-			'id'            => 'wcd-checks-widget',
+			'id'            => 'wcd-safe-update-widget',
 			'plugin'        => WCD_MAINWP_PLUGIN_FILE,
-			'key'           => 'wcd_checks_widget',
-			'metabox_title' => 'WebChange Detector',
-			'callback'      => array( 'WCD_MainWP_Widget', 'render_metabox' ),
+			'key'           => 'wcd_safe_update_widget',
+			'metabox_title' => 'WebChange Detector: Safe Update',
+			'callback'      => array( 'WCD_MainWP_Widget', 'render_safe_update_metabox' ),
+			'layout'        => array( 0, 20, 12, 10 ),
 		);
 
 		return $metaboxes;
 	}
 
 	/**
-	 * Render the extension's settings admin page.
+	 * Add the add-on's widget to MainWP's "Page Settings" show/hide list so the user can hide it.
+	 *
+	 * MainWP gates each metabox on the "advanced-{id}" key in the mainwp_settings_show_widgets user
+	 * option; a widget only gets a hide checkbox once it is registered here. Default stays shown
+	 * (an unknown key renders).
+	 *
+	 * @param array $widgets Show/hide list ([ widget_id => label ]).
+	 * @return array List with this add-on's widget appended.
+	 */
+	public static function register_widget_screen_options( $widgets ): array {
+		$widgets = is_array( $widgets ) ? $widgets : array();
+
+		$widgets['advanced-wcd-safe-update-widget'] = esc_html__( 'WebChange Detector: Safe Update', 'webchangedetector-for-mainwp' );
+
+		return $widgets;
+	}
+
+	/**
+	 * Render the extension page: the tab switcher (Run, Checks, Settings, Account) and the active
+	 * tab body. The template resolves the active tab from the ?tab= query arg.
 	 *
 	 * @return void
 	 */
@@ -165,13 +161,24 @@ class WCD_MainWP_Bootstrap {
 	}
 
 	/**
+	 * Admin URL of one of the extension page's tabs (Run, Checks, Settings, Account). The four tabs
+	 * all live on the single extension page (settings_page_slug()) and switch via a ?tab= reload.
+	 *
+	 * @param string $tab Tab key: 'run', 'checks', 'settings' or 'account'.
+	 * @return string The admin URL for that tab.
+	 */
+	public static function tab_url( string $tab ): string {
+		return admin_url( 'admin.php?page=' . self::settings_page_slug() . '&tab=' . rawurlencode( $tab ) );
+	}
+
+	/**
 	 * The shared "no API token yet" setup sentence, with the account and settings links resolved.
 	 * One source of truth for the dashboard hint banner and the settings-page notice.
 	 *
 	 * @return string HTML (safe for wp_kses_post output): the instruction with two anchors.
 	 */
 	public static function no_token_hint_html(): string {
-		$settings_url = admin_url( 'admin.php?page=' . self::settings_page_slug() );
+		$settings_url = self::tab_url( 'account' );
 
 		return sprintf(
 			/* translators: 1: webchangedetector.com account link, 2: settings page link. */
@@ -184,27 +191,9 @@ class WCD_MainWP_Bootstrap {
 	/* ───────────────────────────── Entry point ─────────────────────────── */
 
 	/**
-	 * Render the hero banner at the top of the dashboard body.
-	 *
-	 * Fires for both the Operations dashboard and an individual child-site overview (both go through
-	 * MainWP_Overview::render_dashboard_body, which passes the 'dashboard' context). We tell them
-	 * apart with MainWP_System_Utility::get_current_wpid(): a site id means single-site scope.
-	 *
-	 * @param string $context The overview context ('dashboard', 'clients', 'insights', ...).
-	 */
-	public static function render_overview_banner( $context = '' ): void {
-		if ( 'dashboard' !== $context ) {
-			return;
-		}
-		// The dashboard overview is the reliable first-run surface, so it carries the no-token hint
-		// (instead of rendering nothing). The Updates-page entry point does not: see render_scoped_banner().
-		self::render_scoped_banner( false, true );
-	}
-
-	/**
-	 * Render the same hero banner above the native Updates page's plugin list. Only shown when the
-	 * plugin updates tab actually has updates (the hook passes the total). Scope is detected the same
-	 * way as the dashboard banner (current site id => single site, else bulk).
+	 * Render the hero banner above the native Updates page's plugin list. Only shown when the
+	 * plugin updates tab actually has updates (the hook passes the total). Scope is detected by
+	 * resolve_banner_scope() (current site id => single site, else bulk).
 	 *
 	 * @param mixed $websites             Child sites in the updates view (unused).
 	 * @param int   $total_plugin_upgrades  Number of available plugin updates in scope.
@@ -218,30 +207,25 @@ class WCD_MainWP_Bootstrap {
 	}
 
 	/**
-	 * Detect scope (single enabled site vs. bulk over all enabled sites) and render the hero banner.
-	 * Shared by the dashboard and Updates-page entry points. No-ops without a token or enabled sites.
+	 * Resolve the entry-point scope (single enabled site vs. bulk over all enabled sites) and the
+	 * pending-update aggregates. Shared by the Updates-page banner (render_scoped_banner) and the
+	 * dashboard "Safe Update" widget (WCD_MainWP_Widget::render_safe_update_metabox). Assumes a token
+	 * is configured (callers check first).
 	 *
-	 * @param bool $updates_known_present Force the CTA enabled (caller already knows updates exist).
-	 * @param bool $allow_no_token_hint   When no token is set, render the setup hint instead of nothing.
-	 *                                    Only the dashboard overview passes true; the Updates-page entry
-	 *                                    point keeps the silent no-op (its banner is already conditional).
+	 * @param bool $force_enabled Force the CTA enabled even when the pending count is 0 (caller knows
+	 *                            updates exist, e.g. the Updates-page entry point).
+	 * @return array|null { scope, site_id, sites_count, updates_count, updates_sites_count,
+	 *                      force_enabled } or null when nothing should render (no enabled sites, or a
+	 *                      single site that is not enabled for WCD).
 	 */
-	protected static function render_scoped_banner( bool $updates_known_present = false, bool $allow_no_token_hint = false ): void {
-		// No API token yet: nothing to run. Offer the setup hint on surfaces that asked for it.
-		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
-			if ( $allow_no_token_hint ) {
-				include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner-no-token.php';
-			}
-			return;
-		}
-
+	public static function resolve_banner_scope( bool $force_enabled = false ): ?array {
 		$util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
 		$site_id = ( class_exists( $util ) && method_exists( $util, 'get_current_wpid' ) ) ? (int) $util::get_current_wpid() : 0;
 
 		if ( $site_id > 0 ) {
 			// Individual child-site context: only when this site is enabled for WCD.
 			if ( ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
-				return;
+				return null;
 			}
 			$scope       = 'site';
 			$sites_count = 1;
@@ -257,17 +241,53 @@ class WCD_MainWP_Bootstrap {
 				)
 			);
 			if ( count( $enabled ) < 1 ) {
-				return;
+				return null;
 			}
 			$scope       = 'bulk';
 			$sites_count = count( $enabled );
 			$by_site     = WCD_MainWP_Update_Flow::pending_updates_by_site( $enabled );
 		}
 
-		// Null = MainWP's DB layer unavailable: the banner then drops both the pending-update
-		// number and the "X / Y sites with updates" split (fail open).
-		$updates_count       = null === $by_site ? null : array_sum( $by_site );
-		$updates_sites_count = null === $by_site ? null : count( array_filter( $by_site ) );
+		// Null = MainWP's DB layer unavailable: drop both the pending-update number and the
+		// "X / Y sites with updates" split (fail open).
+		return array(
+			'scope'               => $scope,
+			'site_id'             => 'site' === $scope ? $site_id : 0,
+			'sites_count'         => $sites_count,
+			'updates_count'       => null === $by_site ? null : array_sum( $by_site ),
+			'updates_sites_count' => null === $by_site ? null : count( array_filter( $by_site ) ),
+			'force_enabled'       => $force_enabled,
+		);
+	}
+
+	/**
+	 * Detect scope and render the hero banner. Used by the Updates-page entry point. No-ops without a
+	 * token or enabled sites.
+	 *
+	 * @param bool $updates_known_present Force the CTA enabled (caller already knows updates exist).
+	 * @param bool $allow_no_token_hint   When no token is set, render the setup hint instead of nothing.
+	 *                                    The Updates-page entry point keeps the silent no-op (its banner
+	 *                                    is already conditional).
+	 */
+	protected static function render_scoped_banner( bool $updates_known_present = false, bool $allow_no_token_hint = false ): void {
+		// No API token yet: nothing to run. Offer the setup hint on surfaces that asked for it.
+		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
+			if ( $allow_no_token_hint ) {
+				include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner-no-token.php';
+			}
+			return;
+		}
+
+		$wcd_scope = self::resolve_banner_scope( $updates_known_present );
+		if ( null === $wcd_scope ) {
+			return;
+		}
+
+		$scope               = $wcd_scope['scope'];
+		$site_id             = $wcd_scope['site_id'];
+		$sites_count         = $wcd_scope['sites_count'];
+		$updates_count       = $wcd_scope['updates_count'];
+		$updates_sites_count = $wcd_scope['updates_sites_count'];
 
 		$force_enabled = $updates_known_present;
 		include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner.php';
@@ -285,18 +305,12 @@ class WCD_MainWP_Bootstrap {
 			return;
 		}
 
+		// Single stylesheet for the whole add-on (the Checks-tab styles, scoped to .wcd-runs, live in
+		// the same file): both surfaces always load together, so one file = one request.
 		wp_enqueue_style(
 			'wcd-mainwp',
 			WCD_MAINWP_PLUGIN_URL . 'assets/css/wcd-mainwp.css',
 			array(),
-			WCD_MAINWP_VERSION
-		);
-
-		// Visual Checks overview styles (scoped to .wcd-runs; harmless on other pages).
-		wp_enqueue_style(
-			'wcd-runs',
-			WCD_MAINWP_PLUGIN_URL . 'assets/css/wcd-runs.css',
-			array( 'wcd-mainwp' ),
 			WCD_MAINWP_VERSION
 		);
 
@@ -314,8 +328,7 @@ class WCD_MainWP_Bootstrap {
 			array(
 				'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
 				'nonce'           => wp_create_nonce( WCD_MainWP_Ajax::NONCE ),
-				// MainWP prefixes a sites-submenu slug with "ManageSites" for the admin page hook.
-				'visualChecksUrl' => admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Runs_View::PAGE_SLUG ),
+				'visualChecksUrl' => self::tab_url( 'checks' ),
 				'upgradeUrl'      => 'https://www.webchangedetector.com/pricing/',
 				'strings'         => self::js_strings(),
 			)
@@ -352,6 +365,7 @@ class WCD_MainWP_Bootstrap {
 	protected static function js_strings(): array {
 		return array(
 			'cancel'            => __( 'Cancel', 'webchangedetector-for-mainwp' ),
+			'resetConfirm'      => __( 'Reset the WebChange Detector connection? This disconnects all sites and you will have to enable them again. Your data on WebChange Detector is not deleted.', 'webchangedetector-for-mainwp' ),
 			'preflightTitle'    => __( 'Pre-update visual check', 'webchangedetector-for-mainwp' ),
 			'preflightLead'     => __( 'WebChange Detector captures every selected page before the updates, installs all updates, then re-captures and compares.', 'webchangedetector-for-mainwp' ),
 			'confirmRun'        => __( 'Capture & update', 'webchangedetector-for-mainwp' ),
@@ -360,7 +374,6 @@ class WCD_MainWP_Bootstrap {
 			// Preflight summary strip + sections.
 			'sites'             => __( 'Sites', 'webchangedetector-for-mainwp' ),
 			'pages'             => __( 'Pages', 'webchangedetector-for-mainwp' ),
-			'screenshots'       => __( 'Screenshots', 'webchangedetector-for-mainwp' ),
 			'checks'            => __( 'Checks', 'webchangedetector-for-mainwp' ),
 			'desktop'           => __( 'Desktop', 'webchangedetector-for-mainwp' ),
 			'mobile'            => __( 'Mobile', 'webchangedetector-for-mainwp' ),
@@ -444,15 +457,9 @@ class WCD_MainWP_Bootstrap {
 			'bulkSyncFailed'    => __( '%d failed.', 'webchangedetector-for-mainwp' ),
 			'bulkSyncConfirm'   => __( 'This activates visual checks for every managed website. Websites are unlimited on every plan; only the checks you run count against it. Continue?', 'webchangedetector-for-mainwp' ),
 			'ctaRunning'        => __( 'Visual check running…', 'webchangedetector-for-mainwp' ),
-			'closeRunning'      => __( 'Updates are still running. Close anyway? The run keeps going in the background.', 'webchangedetector-for-mainwp' ),
-			// Resume of an interrupted run.
-			'resumeTitle'       => __( 'Unfinished safe update found', 'webchangedetector-for-mainwp' ),
-			/* translators: %d: number of sites (singular). */
-			'resumeBodySingle'  => __( 'Updates were installed, but the post-update screenshots for %d site are still missing. Take them now to complete your change detections.', 'webchangedetector-for-mainwp' ),
-			/* translators: %d: number of sites. */
-			'resumeBodyPlural'  => __( 'Updates were installed, but the post-update screenshots for %d sites are still missing. Take them now to complete your change detections.', 'webchangedetector-for-mainwp' ),
-			'resumePost'        => __( 'Take post-update screenshots', 'webchangedetector-for-mainwp' ),
-			'discard'           => __( 'Discard', 'webchangedetector-for-mainwp' ),
+			// Reopen button shown next to the widget heading while the run popup is closed.
+			'reopenRunning'     => __( 'Updates running', 'webchangedetector-for-mainwp' ),
+			'keepOpenWarning'   => __( 'Please keep this popup open until the run finishes for a smooth update flow.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of sites (singular). */
 			'metaErrorSingle'   => __( 'The checks for %d site could not be loaded. It would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of sites. */

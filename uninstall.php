@@ -27,6 +27,7 @@ $wcd_mainwp_transients = array(
 	'wcd_mainwp_account_details',
 	'wcd_mainwp_token_error',
 	'wcd_mainwp_token_verified',
+	'wcd_mainwp_token_reset',
 );
 
 foreach ( $wcd_mainwp_transients as $wcd_mainwp_transient ) {

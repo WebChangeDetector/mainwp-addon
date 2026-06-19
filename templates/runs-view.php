@@ -1,10 +1,11 @@
 <?php
 /**
- * "Visual Checks" overview page (Sites subpage, linked from the Monitoring menu group).
+ * "Checks" tab body of the WebChange Detector extension page.
  *
- * Native MainWP chrome (pageheader/pagefooter) around a Fomantic filter bar + an empty results
- * container; wcd-mainwp.js detects #wcd-runs and loads the runs via AJAX (no inline JS/CSS).
- * Only On-Demand Checks are shown; the source filter is fixed server-side.
+ * A Fomantic filter bar + an empty results container; wcd-mainwp.js detects #wcd-runs and loads the
+ * runs via AJAX (no inline JS/CSS). Only On-Demand Checks are shown; the source filter is fixed
+ * server-side. The extension page shell (templates/admin-page.php) supplies the MainWP chrome + tab
+ * switcher.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -13,29 +14,23 @@ defined( 'ABSPATH' ) || exit;
 
 $wcd_mainwp_token = WCD_MainWP_Site_Settings::get_global();
 
-do_action( 'mainwp_pageheader_sites', WCD_MainWP_Runs_View::PAGE_SLUG );
-
 if ( '' === $wcd_mainwp_token ) {
-	$wcd_mainwp_settings_url = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
-	WCD_MainWP_Runs_View::render_tabs( 'checks' );
+	$wcd_mainwp_settings_url = WCD_MainWP_Bootstrap::tab_url( 'account' );
 	?>
-	<div class="ui bottom attached padded segment">
+	<div class="ui padded segment">
 		<div class="ui info message"><p>
 			<?php
 			printf(
-				/* translators: %s: settings page URL. */
-				wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
+				/* translators: %s: Account tab URL. */
+				wp_kses_post( __( 'No API token configured. Add one on the <a href="%s">Account</a> tab.', 'webchangedetector-for-mainwp' ) ),
 				esc_url( $wcd_mainwp_settings_url )
 			);
 			?>
 		</p></div>
 	</div>
 	<?php
-	do_action( 'mainwp_pagefooter_sites', WCD_MainWP_Runs_View::PAGE_SLUG );
 	return;
 }
-
-WCD_MainWP_Runs_View::render_tabs( 'checks' );
 
 $wcd_mainwp_status_options  = WCD_MainWP_Runs_View::status_options();
 $wcd_mainwp_website_options = WCD_MainWP_Runs_View::website_options();
@@ -43,7 +38,7 @@ $wcd_mainwp_website_options = WCD_MainWP_Runs_View::website_options();
 $wcd_mainwp_from_initial = wp_date( 'Y-m-d', time() - 30 * DAY_IN_SECONDS );
 $wcd_mainwp_to_initial   = wp_date( 'Y-m-d' );
 ?>
-<div class="ui bottom attached padded segment wcd-runs" id="wcd-runs" data-from="<?php echo esc_attr( $wcd_mainwp_from_initial ); ?>" data-to="<?php echo esc_attr( $wcd_mainwp_to_initial ); ?>">
+<div class="ui padded segment wcd-runs" id="wcd-runs" data-from="<?php echo esc_attr( $wcd_mainwp_from_initial ); ?>" data-to="<?php echo esc_attr( $wcd_mainwp_to_initial ); ?>">
 
 	<div class="ui grid">
 		<div class="equal width row ui mini form">
@@ -112,5 +107,3 @@ $wcd_mainwp_to_initial   = wp_date( 'Y-m-d' );
 	</div>
 	<div id="wcd-runs-pagination" class="wcd-runs-pagination-wrap"></div>
 </div>
-<?php
-do_action( 'mainwp_pagefooter_sites', WCD_MainWP_Runs_View::PAGE_SLUG );
