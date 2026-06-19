@@ -37,7 +37,6 @@ class WCD_MainWP_Ajax {
 			'get_site_urls',
 			'update_url',
 			'update_all_urls',
-			'save_url_activation',
 			'banner_stats',
 			'preflight',
 			'take_pre',
@@ -266,11 +265,9 @@ class WCD_MainWP_Ajax {
 		}
 
 		$payload = array(
-			'urls'                    => $clean,
-			'active'                  => $active,
-			'total'                   => count( $clean ),
-			// Cached per-website defaults for newly synced URLs (drives the panel's toggles).
-			'url_activation_defaults' => WCD_MainWP_Site_Map::get_url_activation_defaults( $site_id ),
+			'urls'   => $clean,
+			'active' => $active,
+			'total'  => count( $clean ),
 		);
 
 		if ( $paginated ) {
@@ -359,42 +356,6 @@ class WCD_MainWP_Ajax {
 				'checks' => (int) ( $counts['selected_checks_count'] ?? 0 ),
 			)
 		);
-	}
-
-	/**
-	 * Save the per-website "activate new URLs" defaults (desktop/mobile). These are applied by the API
-	 * to URLs the next sync first assigns to the site's detection groups; existing URLs keep their state.
-	 *
-	 * @return void
-	 */
-	public static function save_url_activation(): void {
-		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$site_id    = self::site_id();
-		$website_id = WCD_MainWP_Site_Map::get_website( $site_id );
-		$desktop    = ! empty( $_POST['desktop'] ) && 'false' !== $_POST['desktop'];
-		$mobile     = ! empty( $_POST['mobile'] ) && 'false' !== $_POST['mobile'];
-
-		if ( '' === $website_id ) {
-			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
-		}
-
-		$defaults = array(
-			'desktop' => $desktop,
-			'mobile'  => $mobile,
-		);
-
-		$response = WCD_MainWP_API::update_website(
-			$website_id,
-			array( 'url_activation_defaults' => $defaults ),
-			self::token()
-		);
-		if ( ! $response['ok'] ) {
-			wp_send_json_error( array( 'message' => $response['error'] ) );
-		}
-
-		WCD_MainWP_Site_Map::set_url_activation_defaults( $site_id, $defaults );
-
-		wp_send_json_success( $defaults );
 	}
 
 	/**

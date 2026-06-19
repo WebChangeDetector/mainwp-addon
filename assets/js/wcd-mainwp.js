@@ -333,18 +333,6 @@
             selectAll
         ]));
 
-        // Per-website default: activate URLs added by future syncs. Independent of the URL list
-        // (a website setting), so it stays visible even when the site has no URLs yet.
-        var activation = el('div', { class: 'wcd-url-activation', 'data-role': 'urlactivation' }, [
-            el('span', { class: 'wcd-muted', text: t('activateNew') })
-        ]);
-        ['desktop', 'mobile'].forEach(function (kind) {
-            var input = el('input', { type: 'checkbox', 'data-activation': kind });
-            input.addEventListener('change', function () { onSaveUrlActivation(card, input); });
-            activation.appendChild(el('label', {}, [input, ' ' + t(kind)]));
-        });
-        box.appendChild(activation);
-
         box.appendChild(el('div', { 'data-role': 'urllist' }));
         box.appendChild(el('div', { class: 'wcd-url-pager', 'data-role': 'urlpager' }));
         return box;
@@ -455,13 +443,6 @@
         // Select-all targets the WHOLE group, so hide it while a search filters the list — a user
         // looking at 3 matches must not silently enable checks for every URL of the site.
         box.querySelector('.wcd-url-selectall').hidden = ('' !== search);
-        // Hydrate the per-website "activate new URLs" toggles from the server payload.
-        var activationBox = box.querySelector('[data-role="urlactivation"]');
-        if (activationBox && data.url_activation_defaults) {
-            var activationInputs = activationBox.querySelectorAll('input[type="checkbox"]');
-            if (activationInputs[0]) { activationInputs[0].checked = !!data.url_activation_defaults.desktop; }
-            if (activationInputs[1]) { activationInputs[1].checked = !!data.url_activation_defaults.mobile; }
-        }
         renderUrlRows(card, data.urls);
         renderUrlPager(card, data);
         if ('' === search) {
@@ -474,22 +455,6 @@
     // derived checked-state would require fetching every URL — exactly what pagination removes.
     // No optimistic UI; the reload after the bulk call shows server truth (also settling any race
     // with an in-flight single toggle: last write wins server-side).
-    // Persist the per-website "activate new URLs by default" toggles. Both values are sent together;
-    // on failure the toggle that triggered the change is reverted (mirrors the single-URL toggle).
-    function onSaveUrlActivation(card, changed) {
-        var box = card.querySelector('[data-role="urlactivation"]');
-        if (!box) { return; }
-        var inputs = box.querySelectorAll('input[type="checkbox"]');
-        var desktop = inputs[0] ? inputs[0].checked : false;
-        var mobile = inputs[1] ? inputs[1].checked : false;
-        api('save_url_activation', { site_id: siteIdOf(card), desktop: desktop ? 1 : 0, mobile: mobile ? 1 : 0 })
-            .catch(function (e) {
-                if (handleUnlinked(card, e)) { return; }
-                if (changed) { changed.checked = !changed.checked; }
-                window.alert(e.message);
-            });
-    }
-
     function onSelectAll(card, kind, toggle) {
         var enabled = toggle.checked;
         if (!enabled && !window.confirm(fmt(t('confirmDisableAll'), { '%s': t(kind) }))) {
@@ -506,6 +471,7 @@
                 updateUrlCount(card, data.active, card.getAttribute('data-url-total') || data.active);
             }
         }).catch(function (e) {
+            if (handleUnlinked(card, e)) { return; }
             toggle.checked = !enabled;
             window.alert(e.message);
         }).finally(function () {

@@ -303,19 +303,6 @@ class WCD_MainWP_API {
 	}
 
 	/**
-	 * Update a website's settings (e.g. url_activation_defaults). The website is resolved by its
-	 * UUID under the current account, so no domain/managed_by is needed here.
-	 *
-	 * @param string $website_id Website UUID.
-	 * @param array  $fields     Fields to update, e.g. 'url_activation_defaults' => ['desktop' => true, 'mobile' => false].
-	 * @param string $api_token  Bearer token; falls back to the stored token.
-	 * @return array Normalized API result.
-	 */
-	public static function update_website( string $website_id, array $fields, string $api_token = '' ): array {
-		return self::request( 'PATCH', '/websites/' . rawurlencode( $website_id ), $fields, $api_token );
-	}
-
-	/**
 	 * Fetch this account's MainWP-managed website(s) for a domain (managed_by=mainwp). Used to reuse
 	 * an existing website instead of creating a duplicate (e.g. after an API token switch).
 	 *
