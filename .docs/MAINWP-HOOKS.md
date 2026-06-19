@@ -25,22 +25,20 @@ the user to run the native update; the after-update hook still drives the post s
 
 | Hook | Type | Args | Used for |
 |------|------|------|----------|
-| `mainwp_getextensions` | filter | `$extensions` | Register the extension + settings page callback + icon |
-| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) + the "Visual Checks" page (`WcdVisualChecks`) and its "Settings" tab (`WcdVisualChecksSettings`), both `sitetab => false`, `menu_hidden => true`, explicit `href` |
-| `mainwp_manage_sites_navigation_items` | filter | `$items, $site_id, $shownPage` | Removes our entries from the Sites page navigation (the column is only visible on per-site views in MainWP 6; the visible Visual Checks / Settings switcher is our own `ui top attached tabular menu`) |
-| `mainwp_menu_extensions_left_menu` | filter | `$items` | Adds the "Visual Checks" entry (level 2, `parent_key => 'Extensions-Mainwp-Monitoring'`, `active_path`) to the left menu's Monitoring category group. This is MainWP's documented way for third-party pages to join a category group (consumed in `page-mainwp-extensions-groups.php`) |
-| `mainwp_getmetaboxes` | filter | `$metaboxes` | Dashboard widget (account/credits) |
+| `mainwp_getextensions` | filter | `$extensions` | Register the extension + the extension page callback (`render_admin_page`, hosting the Run/Checks/Settings/Account tabs) + icon |
+| `mainwp_getsubpages_sites` | filter | `$subPages` | Per-site tab (`WcdVisualRegressionTesting`) only (`sitetab => true`, `menu_hidden => true`). Run/Checks/Settings/Account are tabs on the extension page (`?tab=` reload), not Sites subpages |
 | `mainwp_getdbsites` | filter | `$pluginFile, $key, $sites, $groups, $options, $clients` | List managed child sites (id, url, name) |
 | `mainwp_fetchurlauthed` | filter | `$pluginFile, $key, $websiteId, $what, $params, $rawResponse = null` | Dashboard-to-child RPC for registered extensions. We call it with `$what = 'cache_purge_action'` to purge the child's page cache (see "Cache purging" below) |
 | `mainwp_site_synced` | action | `$pWebsite, $information` | After a child site syncs -> sync its URLs to the WCD group |
 | `mainwp_added_new_site` | action | `$id, $website` | Auto-enable a newly added child site for WCD (provision website/groups + URL sync), when the "Auto-enable new sites" setting is on. Best-effort: errors are swallowed so MainWP's add-site never breaks |
 | `mainwp_getallposts` | filter/hook | `$data` (search params) | Fetch a child's posts (hooks-first; pages use the sanctioned call) |
-| `mainwp_before_overview_widgets` | action | `$context` | Inject the WCD hero banner at the top of the dashboard body. Fires with `'dashboard'` on BOTH the Operations dashboard and an individual child-site overview (both go through `MainWP_Overview::render_dashboard_body`); scope is detected via `MainWP_System_Utility::get_current_wpid()` (a site id => single-site, else bulk) |
-| `mainwp_updates_before_plugin_updates` | action | `$websites, $total_plugin_upgrades, ...` | Render the same hero banner above the native Updates page's plugin list, only when `$total_plugin_upgrades > 0`. Same scope detection as the dashboard banner |
+| `mainwp_getmetaboxes` | filter | `$metaboxes` | Register the **Safe Update** dashboard widget (`wcd-safe-update-widget`, draggable/hideable, scope-aware via `MainWP_System_Utility::get_current_wpid()`). MainWP renders it on the Operations dashboard AND the individual child-site overview. Account data lives on the extension page's Account tab, not in a dashboard widget |
+| `mainwp_widgets_screen_options` | filter | `$widgets` | Add the Safe Update widget (`advanced-wcd-safe-update-widget`) to MainWP's "Page Settings" show/hide list (default shown) |
+| `mainwp_updates_before_plugin_updates` | action | `$websites, $total_plugin_upgrades, ...` | Render the WCD hero banner above the native Updates page's plugin list, only when `$total_plugin_upgrades > 0` (the Updates page is not a widget grid). Scope detection via `get_current_wpid()` (a site id => single-site, else bulk) |
 | `mainwp_after_wp_update` | action | `$information, $site` | Once per site after a core update -> post screenshots (recovery / non-card coverage) |
 | `mainwp_after_plugin_theme_translation_update` | action | `$information, $type, $slugs, $site` | Once per type after plugin/theme/translation update -> post screenshots |
-| `mainwp_pageheader_extensions` / `mainwp_pagefooter_extensions` | action | plugin file | MainWP chrome around the settings page |
-| `mainwp_pageheader_sites` / `mainwp_pagefooter_sites` | action | tab slug | MainWP chrome around the per-site tab AND the Visual Checks page (top header + left menu + content wrap) |
+| `mainwp_pageheader_extensions` / `mainwp_pagefooter_extensions` | action | plugin file | MainWP chrome around the whole extension page (all four tabs: Run/Checks/Settings/Account) |
+| `mainwp_pageheader_sites` / `mainwp_pagefooter_sites` | action | tab slug | MainWP chrome around the per-site tab only (`WcdVisualRegressionTesting`) |
 
 ### Notes on the update hooks (verified)
 

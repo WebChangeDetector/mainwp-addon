@@ -13,9 +13,10 @@ $wcd_mainwp_util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
 $wcd_mainwp_site_id = ( class_exists( $wcd_mainwp_util ) && method_exists( $wcd_mainwp_util, 'get_current_wpid' ) ) ? (int) $wcd_mainwp_util::get_current_wpid() : 0;
 $wcd_mainwp_token   = WCD_MainWP_Site_Settings::get_global();
 $wcd_mainwp_enabled = $wcd_mainwp_site_id && WCD_MainWP_Site_Map::is_enabled( $wcd_mainwp_site_id );
-// Token/account live on the extension page; site enabling + URL selection on the Settings tab.
-$wcd_mainwp_account_page = admin_url( 'admin.php?page=' . WCD_MainWP_Bootstrap::settings_page_slug() );
-$wcd_mainwp_settings     = admin_url( 'admin.php?page=ManageSites' . WCD_MainWP_Site_Settings::SUBPAGE_SLUG );
+// Token/account live on the extension page's Account tab; site enabling + URL selection on its
+// Settings tab.
+$wcd_mainwp_account_page = WCD_MainWP_Bootstrap::tab_url( 'account' );
+$wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 ?>
 
 <?php do_action( 'mainwp_pageheader_sites', 'WcdVisualRegressionTesting' ); ?>

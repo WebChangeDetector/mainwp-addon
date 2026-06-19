@@ -332,15 +332,16 @@ class WCD_MainWP_Update_Flow {
 
 	/* ───────────────────────── Run state (resume) ──────────────────────── */
 
-	// The browser orchestrates the safe-update run, so a closed tab between the updates and the
-	// post screenshots would otherwise lose the post phase. Every phase transition is therefore
-	// persisted dashboard-side (network-aware option): the AJAX endpoints record pre batches,
-	// completed updates and post batches as they happen. When the page next loads and a run with
-	// installed updates but missing post batches has been inactive for RUN_STALE_AFTER seconds,
-	// the UI offers to take the missing post screenshots (resume) or discard the run.
+	// The browser orchestrates the safe-update run, so navigating away (or a closed tab) would
+	// otherwise lose the remaining phases. Every phase transition is therefore persisted
+	// dashboard-side (network-aware option): the AJAX endpoints record pre batches, completed
+	// updates and post batches as they happen, and the driving tab sends a short heartbeat. When a
+	// page next loads with a still-active run whose heartbeat has gone silent (RESUME_AFTER), it
+	// automatically reopens the run popup and continues at the persisted phase.
 
 	const RUN_STATE_KEY   = 'wcd_mainwp_active_run';
-	const RUN_STALE_AFTER = 600; // Seconds without AJAX activity before a run counts as abandoned.
+	const RUN_STALE_AFTER = 600; // Seconds idle before an empty (nothing-happened) run is dropped as leftover.
+	const RESUME_AFTER    = 20;  // Seconds without a heartbeat before another page may take over the run.
 
 	/**
 	 * The persisted state of the current safe-update run, or an empty array.
@@ -356,15 +357,18 @@ class WCD_MainWP_Update_Flow {
 	/**
 	 * Start tracking a new run (replaces any previous state).
 	 *
-	 * @param array $sites Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 * @param array  $sites  Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 * @param string $driver Opaque id of the tab driving the run (so it can reclaim it instantly after
+	 *                       a same-tab reload/navigation, without waiting out the two-tab guard).
 	 * @return void
 	 */
-	public static function start_run( array $sites ): void {
+	public static function start_run( array $sites, string $driver = '' ): void {
 		self::save_run(
 			array(
 				'started_at'    => time(),
 				'last_activity' => time(),
 				'phase'         => 'pre',
+				'driver'        => $driver,
 				'sites'         => $sites,
 				'pre_batches'   => array(),
 				'updated_sites' => array(),
@@ -390,10 +394,40 @@ class WCD_MainWP_Update_Flow {
 	public static function touch_run(): void {
 		$state = self::run_state();
 		// Throttled: poll ticks every ~3s; one option write per 30s keeps the timestamp fresh
-		// enough for the 600s staleness gate.
+		// enough for the staleness gate.
 		if ( $state && ( time() - (int) ( $state['last_activity'] ?? 0 ) ) > 30 ) {
 			self::save_run( $state );
 		}
+	}
+
+	/**
+	 * Stamp the run as active right now (the driving tab's heartbeat). Unthrottled: a fresh stamp is
+	 * what tells another page that this run is still being driven, so it must never be skipped. Also
+	 * records the driver id so a same-tab reload can recognise its own run and reclaim it instantly.
+	 *
+	 * @param string $driver Opaque id of the tab sending the heartbeat (becomes the current driver).
+	 * @return void
+	 */
+	public static function heartbeat( string $driver = '' ): void {
+		$state = self::run_state();
+		if ( $state ) {
+			if ( '' !== $driver ) {
+				$state['driver'] = $driver;
+			}
+			self::save_run( $state );
+		}
+	}
+
+	/**
+	 * Seconds since the run last showed activity (heartbeat / phase write).
+	 *
+	 * @param array $state Run state (from run_state()).
+	 * @return int
+	 */
+	public static function idle_seconds( array $state ): int {
+		$last = isset( $state['last_activity'] ) ? (int) $state['last_activity'] : 0;
+
+		return max( 0, time() - $last );
 	}
 
 	/**
@@ -452,32 +486,6 @@ class WCD_MainWP_Update_Flow {
 			return;
 		}
 		self::save_run( $state );
-	}
-
-	/**
-	 * Run sites whose updates finished but whose post screenshots were never dispatched.
-	 *
-	 * @param array $state Run state (from run_state()).
-	 * @return int[] Site ids with a missing post batch.
-	 */
-	public static function missing_post_sites( array $state ): array {
-		$updated = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? $state['updated_sites'] : array();
-		$posted  = isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? array_keys( $state['post_batches'] ) : array();
-
-		return array_values( array_diff( array_map( 'intval', $updated ), array_map( 'intval', $posted ) ) );
-	}
-
-	/**
-	 * Whether the tracked run has seen no AJAX activity for RUN_STALE_AFTER seconds (the driving
-	 * browser tab is gone, so it is safe to offer a resume).
-	 *
-	 * @param array $state Run state (from run_state()).
-	 * @return bool True when the run counts as abandoned.
-	 */
-	public static function run_is_stale( array $state ): bool {
-		$last = isset( $state['last_activity'] ) ? (int) $state['last_activity'] : 0;
-
-		return ( time() - $last ) > self::RUN_STALE_AFTER;
 	}
 
 	/**

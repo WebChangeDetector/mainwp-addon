@@ -42,9 +42,12 @@
 .wcd-w-95 { width: 95%; }
 .wcd-w-100 { width: 100%; }
 
-/* ── Account/credits (host .ui.segment + .ui.grid; only labels/values here) ─ */
+/* ── Account/credits (host .ui.cards on the Account tab; only labels/values here) ─ */
 .wcd-account-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); margin-top: 6px; }
 .wcd-account-value { font-size: 20px; font-weight: 700; }
+/* First label in a card has the card padding above it already, so drop the extra top margin. */
+.wcd-account-cards .content > .wcd-account-label:first-child { margin-top: 0; }
+.wcd-account-cards .wcd-progress { margin: 8px 0 4px; }
 
 /* ── Site list (host .ui.segments / .ui.segment; only the head row here) ──── */
 .wcd-site-head { display: flex; align-items: center; gap: 14px; }
@@ -76,16 +79,6 @@
 .wcd-url-pager:empty { display: none; }
 .wcd-url-pagegap { color: var(--wcd-muted); font-size: 12px; }
 .wcd-url-pageinfo { margin-left: auto; font-size: 12.5px; color: var(--wcd-muted); font-variant-numeric: tabular-nums; }
-
-/* ── Widget ────────────────────────────────────────────────────────────── */
-.wcd-widget-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.wcd-widget-table td { padding: 3px 0; }
-.wcd-widget-table td:first-child { color: var(--wcd-muted); }
-.wcd-widget-table td:last-child { text-align: right; font-weight: 600; }
-.wcd-widget .wcd-progress { margin-bottom: 8px; }
-.wcd-widget-planrow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.wcd-widget-usage { margin: 6px 0 10px; }
-.wcd-widget-actions { display: flex; gap: 6px; margin-top: 12px; }
 
 /* ── Hero entry banner (Operations dashboard + child-site overview) ─────── */
 .wcd-hero {
@@ -132,6 +125,63 @@
     .wcd-hero__cta { order: 4; width: 100%; justify-content: center; }
 }
 
+/* ── Safe-update run host (shared by the widget, banner and per-site tab) ─ */
+/* The surfaces use native chrome (the widget puts the run host inside its flex-grow
+   mainwp-scrolly-overflow so the footer stays pinned; the banner/tab render it after their content),
+   so the host only needs to collapse until a run renders into it, plus a little top spacing. */
+.wcd-run-host:empty { display: none; }
+.wcd-run-host { margin-top: 12px; }
+
+/* Extension page tab switcher: MainWP's native sub-navigation bar rendered as a Fomantic
+   "ui labeled icon inverted menu mainwp-sub-submenu" (identical to the SeoPress MainWP add-on).
+   The `inverted` class is required: MainWP's theme scopes the readable white labels/icons and the
+   accent-colored active state to `.ui.inverted.menu.mainwp-sub-submenu`, while the bare
+   `.mainwp-sub-submenu` only sets the dark background. `labeled icon` stacks the icon over the
+   label natively, so no custom tab CSS is needed (and none should be added: it would fight the
+   theme, which is exactly what made the labels unreadable before). */
+
+/* ── Run tab (Visual Checks area): the safe-update widget body on a full page ── */
+/* It reuses templates/widget-safe-update.php, but here it is inside a `ui segment`, not a
+   `.mainwp-widget` metabox, so MainWP's `.mainwp-widget *` 1em paddings do not apply. The outer
+   `ui padded segment` supplies the frame; this just separates the stats block from the title. */
+.wcd-run-tab .mainwp-scrolly-overflow { margin-top: 12px; }
+
+/* ── Run popup (the live run card lives in a native Fomantic modal) ──────── */
+/* Wider than the default modal so the three Pre/Updates/Post panels sit side by side; the card
+   already carries its own chrome, so strip the modal content padding and the card's outer frame.
+   The native Fomantic close icon is always hidden in the run popup; the card's OWN dismiss is the
+   single close affordance and only appears once the run finishes (data-state done/error). While the
+   run is in flight there is no close at all (the close is also vetoed in mayCloseModal). */
+.ui.modal.wcd-run-modal { width: 880px; }
+.ui.modal.wcd-run-modal > .content.wcd-run-modalbody { padding: 0; }
+.wcd-run-modalbody .wcd-run { margin: 0; border: 0; border-radius: 0; }
+.ui.modal.wcd-run-modal > .close.icon { display: none; }
+.wcd-run-modalbody .wcd-run__dismiss { display: none; }
+.wcd-run-modalbody .wcd-run[data-state="done"] .wcd-run__dismiss,
+.wcd-run-modalbody .wcd-run[data-state="error"] .wcd-run__dismiss { display: inline-flex; }
+/* Keep-open warning shown directly under the run card header while the run is in flight.
+   No own vertical margin: the head's padding-bottom sits above it, the timeline's padding-top below;
+   horizontal 20px aligns it with the header band's padding. */
+.wcd-run-modalbody .wcd-run-warning { margin: 10px 20px; }
+@media (max-width: 920px) {
+    .ui.modal.wcd-run-modal { width: 92%; }
+    .wcd-run-modalbody .wcd-run__panels { grid-template-columns: 1fr; }
+}
+
+/* ── "Updates running" reopen button (next to the widget heading) ────────── */
+/* The widget header becomes a flex row so the reopen button sits to the right of the title. */
+.wcd-widget-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.wcd-widget-header .ui.header { margin-bottom: 0; }
+/* Not-activated state: pad the notice so it does not touch the metabox edges (the activated body
+   gets its padding from MainWP's `.mainwp-widget *` rules + the scroll area instead). */
+.wcd-empty-state { padding: 14px; }
+.wcd-reopen-wrap { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.wcd-reopen.is-ok { background: rgba(31, 174, 87, .15); color: var(--wcd-green); }
+.wcd-reopen.is-flagged { background: rgba(224, 161, 6, .15); color: var(--wcd-amber); }
+.wcd-reopen.is-failed { background: rgba(216, 70, 60, .15); color: var(--wcd-red); }
+/* On the Updates banner there is no header slot, so the button falls back into the run-host below. */
+.wcd-run-host .wcd-reopen-wrap { margin-top: 4px; }
+
 /* ── Preflight (confirm-only) modal content ────────────────────────────── */
 /* Lives inside a native Fomantic modal; translucent tints so it reads on light AND dark themes. */
 .wcd-pf-lead { margin: 0 0 14px; font-size: 13px; color: var(--wcd-muted); }
@@ -163,6 +213,9 @@
 .wcd-pf-updtoggle { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; background: transparent; border: 0; cursor: pointer; font-size: 13px; font-weight: 600; color: inherit; text-align: left; }
 .wcd-pf-updchev { margin-left: auto; }
 .wcd-pf-updatesbody { padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+/* The class above sets display:flex, which overrides the UA [hidden]{display:none} rule
+   (author origin beats user-agent), so the accordion never collapsed. Restore hide-on-hidden. */
+.wcd-pf-updatesbody[hidden] { display: none; }
 .wcd-pf-updrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .wcd-pf-updsite { min-width: 140px; font-size: 12px; color: var(--wcd-muted); }
 .wcd-pf-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: rgba(128, 128, 128, .12); font-size: 11.5px; }
@@ -256,3 +309,53 @@
 @media (max-width: 782px) {
     .wcd-run__panels { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   "Checks" tab (Visual Checks overview): scoped to .wcd-runs.
+   Leans on MainWP's native Fomantic UI (ui form / dropdown / table / label / message / button) so it
+   themes for light AND dark automatically. Only layout glue and theme-neutral accents here: no
+   hardcoded surfaces or text colours. Text uses `inherit` / `opacity`; muted copy uses .wcd-muted.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Filter bar (native ui mini form + selection dropdowns; only layout glue here) ── */
+/* Flex keeps every control (dropdowns, date inputs, buttons) on a common bottom edge, so the
+   single- and multi-select dropdowns (slightly different heights) stay visually aligned. */
+.wcd-runs .wcd-runs-filters { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 6px; font-size: 1rem;}
+.wcd-runs .wcd-runs-filters .ui.selection.dropdown { min-width: 11em; margin: 0; text-align: left; }
+.wcd-runs .wcd-runs-filters .ui.button { margin: 0; }
+.wcd-runs .wcd-runs-filters .multiple.dropdown { vertical-align: top;}
+.wcd-runs .wcd-runs-daterange { display: inline-flex; align-items: center; gap: 6px; }
+.wcd-runs .wcd-runs-daterange[hidden] { display: none; }
+.wcd-runs .wcd-runs-daterange input[type="date"] { width: auto; margin: 0; }
+
+/* ── Batch accordion table (native MainWP updates-table pattern) ───────── */
+/* MainWP's mainwp-manage-updates-table forces `white-space: nowrap` at tablet/desktop widths, which
+   the long AI Summary column would stretch past the page (MainWP scrolls its own updates table; ours
+   is not in that container). Let the AI column wrap, and keep a horizontal scroll as a safety net. */
+.wcd-runs-list { margin-top: 8px; overflow-x: auto; }
+.wcd-runs .wcd-col-ai { white-space: normal; word-break: break-word; min-width: 16em; }
+.wcd-runs-table .wcd-runs-batch-head { cursor: pointer; }
+.wcd-runs-table .accordion-trigger i.icon { opacity: .6; }
+/* Fomantic's stackable table forces `display` on rows at mobile widths, which would defeat the
+   hidden attribute of collapsed accordion rows. */
+.wcd-runs-table tr[hidden] { display: none !important; }
+.wcd-runs .wcd-status-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.wcd-runs .wcd-ai-summary-text { opacity: .85; }
+
+/* ── Comparison table: only small accents (the `ui table` itself themes) ── */
+/* Let the page title/URL cell wrap (MainWP forces `white-space: nowrap` on cells): a long title
+   would otherwise stretch the row and push the View button off-screen behind a horizontal scroll. */
+.wcd-runs .wcd-col-url { white-space: normal; word-break: break-word; min-width: 14em; }
+.wcd-runs .wcd-url-link { font-weight: 600; }
+.wcd-runs .wcd-url-path { font-size: 12px; opacity: .65; word-break: break-all; }
+.wcd-runs .wcd-compared-row { display: flex; align-items: baseline; gap: 6px; }
+.wcd-runs .wcd-ba-label { min-width: 42px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; opacity: .6; }
+.wcd-runs .screenshot-date { font-size: 13px; }
+.wcd-runs .wcd-visual-percentage { font-size: 15px; font-weight: 700; }
+.wcd-runs .wcd-visual-percentage.wcd-vc-sev-low { color: #e0a106; }
+.wcd-runs .wcd-visual-percentage.wcd-vc-sev-high { color: #d8463c; }
+.wcd-runs-loading { padding: 28px; text-align: center; }
+
+/* ── Pagination ───────────────────────────────────────────────────────── */
+.wcd-runs-pagination-wrap { margin-top: 14px; }
+.wcd-runs-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }

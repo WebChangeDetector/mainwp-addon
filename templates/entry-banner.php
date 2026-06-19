@@ -2,10 +2,11 @@
 /**
  * WebChange Detector hero banner.
  *
- * Rendered at the top of the MainWP dashboard body (hook `mainwp_before_overview_widgets`) on both
- * the Operations dashboard (bulk: all enabled sites) and an individual child-site overview (single
- * site). It is the single, prominent entry point into the safe-update flow (decision -> preflight ->
- * pre -> update -> post -> results), driven by the shared `.wcd-safe-update` handler.
+ * Rendered above the native Updates page's plugin list (hook `mainwp_updates_before_plugin_updates`),
+ * only when updates are available. It is one entry point into the safe-update flow (decision ->
+ * preflight -> pre -> update -> post -> results), driven by the shared `.wcd-safe-update` handler; the
+ * Operations dashboard and child-site overview use the native "Safe Update" widget
+ * (`templates/widget-safe-update.php`) instead, since those surfaces are widget grids.
  *
  * Sites + the pending-update count are rendered server-side (cheap). Pages/Checks load progressively
  * via the `banner_stats` AJAX call so the dashboard never blocks on WCD API calls.
@@ -76,5 +77,5 @@ if ( null !== $updates_count && $updates_count > 0 ) {
 		<?php echo esc_html( $wcd_mainwp_no_updates ? __( 'No updates available', 'webchangedetector-for-mainwp' ) : __( 'Run visual check & update', 'webchangedetector-for-mainwp' ) ); ?>
 	</button>
 </div>
-<?php // The unified in-card run renders here, right below the launch band (no popup). ?>
+<?php // The live run card renders in a modal popup; this host holds the "Updates running" reopen button (banner fallback, no header slot). ?>
 <div class="wcd-run-host" data-scope="<?php echo esc_attr( $scope ); ?>" data-site-id="<?php echo esc_attr( (string) $site_id ); ?>"></div>

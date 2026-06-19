@@ -25,7 +25,7 @@ An on-demand check is a visual diff you run around a change you make yourself, l
 1. Create a free WebChange Detector account at [webchangedetector.com](https://www.webchangedetector.com) if you do not have one yet, then copy your API token from your account and enter it in MainWP.
 2. Enable the child sites you want to check.
 3. Sync each enabled child site's pages with "Sync WP URLs" so its pages become available, then select the pages to check (desktop and/or mobile).
-4. Click "Run visual check & update" on your MainWP dashboard or Updates page.
+4. Click "Run visual checks & updates" on your MainWP dashboard or Updates page.
 5. The plugin captures pre-update screenshots, installs all pending updates, captures post-update screenshots and compares them. Before the pre-update screenshots and after the updates, the cache on each child site is cleared automatically, so the screenshots always show the real, freshly generated state of the site.
 6. Review the results on the Visual Checks page: every page with a visual change is flagged, including an AI summary of what changed.
 
@@ -63,7 +63,7 @@ The plugin sends data to `api.webchangedetector.com` only after you have entered
 5. Enable the child sites you want to check.
 6. Sync each enabled child site's pages with "Sync WP URLs" so its pages become available.
 7. Select the pages to check for desktop and/or mobile.
-8. Run your next update from the MainWP dashboard with "Run visual check & update".
+8. Run your next update from the MainWP dashboard with "Run visual checks & updates".
 
 == Frequently Asked Questions ==
 
@@ -97,7 +97,7 @@ No, the plugin does that for you. It clears each child site's cache before the p
 
 = Does this work with MainWP updates started elsewhere (e.g. scheduled)? =
 
-Updates you start outside the plugin's own flow still trigger post-update screenshots as a safety net, so you can compare against the last baseline. For the full pre/post comparison, start the run from the "Run visual check & update" button.
+Updates you start outside the plugin's own flow still trigger post-update screenshots as a safety net, so you can compare against the last baseline. For the full pre/post comparison, start the run from the "Run visual checks & updates" button.
 
 == Screenshots ==
 

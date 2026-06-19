@@ -12,6 +12,8 @@
     var S = cfg.strings || {};
     var POLL_INTERVAL = 3000;
     var POLL_MAX_TRIES = 80; // ~4 minutes per batch.
+    var HEARTBEAT_INTERVAL = 7000;   // keep the run's server-side activity fresh while a tab drives it.
+    var RESUME_RECHECK = 8000;       // re-poll run_status while another tab still looks alive.
 
     function t(key) {
         return S[key] || key;
@@ -54,6 +56,23 @@
         return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
+    // Stable per-tab id, kept in sessionStorage so it survives a reload / same-tab navigation. The
+    // run records its driver, so when this tab comes back it recognises its OWN run and reclaims it
+    // instantly instead of waiting out the two-tab guard. Falls back to a page-local id if storage
+    // is unavailable (then a reload simply uses the heartbeat gate, like before).
+    var cachedDriverId = null;
+    function driverId() {
+        if (cachedDriverId) { return cachedDriverId; }
+        var key = 'wcd_mainwp_driver', id = null;
+        try { id = window.sessionStorage.getItem(key); } catch (e) { id = null; }
+        if (!id) {
+            id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+            try { window.sessionStorage.setItem(key, id); } catch (e2) { /* storage off: page-local only */ }
+        }
+        cachedDriverId = id;
+        return id;
+    }
+
     /* ─────────────────────────────── DOM helpers ───────────────────────── */
 
     function el(tag, attrs, children) {
@@ -81,17 +100,21 @@
     var modalNode = null;
     var closeIconNode = null;   // the original Fomantic-bound close icon, kept across content swaps
     var fallbackDimmer = null;  // only used when Fomantic's modal plugin is unavailable
-    var activeRun = false;      // true while a safe-update pipeline is in flight (drives close guard)
+    var activeRun = false;      // true while a safe-update pipeline is in flight (drives the leave-page guard)
+    var activeRunRef = null;    // the current run object whose card lives in the modal (running OR finished-but-not-dismissed)
     var syncInFlight = 0;       // count of in-flight site activations (drives the leave-page guard)
+    var heartbeatTimer = null;  // keeps the run's server-side activity fresh while THIS tab drives it
+    var resumeRecheckTimer = null;
 
     function hasModalPlugin() {
         return !!(window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.modal === 'function');
     }
 
-    // The run continues server-side regardless; this only stops the user from losing sight of it by
-    // accident. Returns true when the modal may close (no active run, or the user confirmed).
+    // While a run is in flight the popup must stay open for a smooth flow, so the close is vetoed
+    // (the Fomantic close icon is also hidden in the run popup via CSS; the card's own dismiss is the
+    // only close, shown once the run finishes). For a preflight / other content, closing is allowed.
     function mayCloseModal() {
-        return !activeRun || window.confirm(t('closeRunning'));
+        return !activeRun;
     }
 
     function buildModalNode() {
@@ -103,9 +126,10 @@
             window.jQuery(modal).modal({
                 closable: true,
                 observeChanges: true,
-                // Veto the close (X / dimmer) while a run is active unless the user confirms.
                 onHide: mayCloseModal,
-                onHidden: function () { clearModalContent(); }
+                // Keep the run card alive while it owns the modal, so reopening shows its live state.
+                // Only clear when no run card is present (e.g. after a preflight is dismissed).
+                onHidden: function () { if (!activeRunRef) { clearModalContent(); } }
             });
         }
         return modal;
@@ -126,6 +150,7 @@
             modalNode = buildModalNode();
         }
         clearModalContent();
+        modalNode.classList.remove('wcd-run-modal');   // reset; mountRun re-adds it for the run card
         modalNode.classList.toggle('small', !!narrow);
         if (hasModalPlugin()) {
             var $m = window.jQuery(modalNode);
@@ -145,6 +170,18 @@
             modalNode.classList.remove('active', 'visible');
             if (fallbackDimmer) { fallbackDimmer.classList.remove('active', 'visible'); }
             clearModalContent();
+        }
+    }
+
+    // Re-show the modal WITHOUT swapping its content. Used to reopen the running/finished run card
+    // from the widget's mini-indicator: the card already lives in the modal, we just bring it back.
+    function reopenModal() {
+        if (!modalNode) { return; }
+        if (hasModalPlugin()) {
+            var $m = window.jQuery(modalNode);
+            if ($m.modal('is active')) { $m.modal('refresh'); } else { $m.modal('show'); }
+        } else {
+            showFallback();
         }
     }
 
@@ -604,8 +641,10 @@
         return scope === 'site' && siteId ? { site_id: siteId } : {};
     }
 
-    // Locate the in-card run host that belongs to the clicked trigger (the .wcd-run-host sibling
-    // rendered right after each .wcd-hero by entry-banner.php).
+    // Locate the in-card run host that belongs to the clicked trigger. The Updates-page banner
+    // (entry-banner.php) renders the .wcd-run-host right after its .wcd-hero; the dashboard widget
+    // (widget-safe-update.php) has no .wcd-hero, so we fall back to the page's single .wcd-run-host
+    // (at most one entry point renders per page).
     function runHostFor(trigger) {
         var hero = trigger && trigger.closest ? trigger.closest('.wcd-hero') : null;
         if (hero && hero.nextElementSibling && hero.nextElementSibling.classList.contains('wcd-run-host')) {
@@ -677,8 +716,8 @@
         var strip = el('div', { class: 'wcd-pf-summary' });
         // Sites = the run set (matches the confirm button); the "unchecked" note below explains
         // run sites that stay live without screenshots.
-        [[t('sites'), runSites.length], [t('pages'), data.pages], [t('screenshots'), data.screenshots], [t('checks'), data.checks]].forEach(function (pair, i) {
-            strip.appendChild(el('div', { class: 'wcd-pf-stat' + (3 === i ? ' is-accent' : '') }, [
+        [[t('sites'), runSites.length], [t('pages'), data.pages], [t('checks'), data.checks]].forEach(function (pair, i) {
+            strip.appendChild(el('div', { class: 'wcd-pf-stat' + (2 === i ? ' is-accent' : '') }, [
                 el('div', { class: 'wcd-pf-statnum', text: String(pair[1]) }),
                 el('div', { class: 'wcd-pf-statlbl', text: pair[0] })
             ]));
@@ -791,7 +830,8 @@
             document.createTextNode(t('confirmRun') + ' ' + runSites.length + ' ' + plural(runSites.length, t('site'), t('sitesPlural')))
         ]);
         confirm.disabled = !enough;
-        confirm.addEventListener('click', function () { closeModal(); startRun(host, trigger, runSites); });
+        // The run card replaces the preflight in the SAME (already open) modal; the modal stays open.
+        confirm.addEventListener('click', function () { startRun(host, trigger, runSites); });
         foot.appendChild(confirm);
         modal.appendChild(foot);
     }
@@ -961,15 +1001,19 @@
         host.appendChild(card);
 
         return {
-            card: card, pill: pill, sub: sub, dismiss: dismiss, fill: fill, stepNodes: stepNodes,
+            card: card, head: head, pill: pill, sub: sub, dismiss: dismiss, fill: fill, stepNodes: stepNodes,
             pre: pre, upd: upd, post: post, siteRefs: siteRefs, foot: foot,
             single: single, sites: sites, checkSites: checkSites, total: total
         };
     }
 
-    function setFill(run, frac) { setWidth(run.fill, Math.max(0, Math.min(1, frac)) * 100); }
+    function setFill(run, frac) {
+        run.frac = Math.max(0, Math.min(1, frac));
+        setWidth(run.fill, run.frac * 100);
+    }
 
     function setPhase(run, idx) {
+        run.phaseIdx = idx;
         RUN_STEPS.forEach(function (st, i) {
             run.stepNodes[st.id].className = 'wcd-run__step' + (i < idx ? ' is-done' : i === idx ? ' is-active' : '');
         });
@@ -1048,24 +1092,104 @@
     }
 
     function startRun(host, trigger, sites) {
-        if (!host || activeRun) { return; }
-        host.innerHTML = '';
+        if (activeRun) { return; }
         activeRun = true;
         setTriggerRunning(trigger, true);
         var single     = 1 === sites.length;
         var checkSites = sites.filter(function (s) { return s.checks > 0; });
         var total      = checkSites.reduce(function (n, s) { return n + s.checks; }, 0);
-        var run = buildRun(host, sites, checkSites, single, total);
-        run.trigger = trigger;
-        run.dismiss.addEventListener('click', function () { if (!run.dismiss.disabled) { closeRun(run); } });
+        var run = mountRun(host, trigger, sites, checkSites, single, total, true);   // fresh run: open the popup now
+        startHeartbeat();
         // Track the run server-side so it can be resumed if this tab disappears mid-run.
         // Best effort: a failed tracking call must not block the run itself.
         var tracking = api('run_start', {
+            driver: driverId(),
             site_ids: checkSites.map(function (s) { return s.site_id; }),
             names: checkSites.map(function (s) { return s.name; }),
             checks: checkSites.map(function (s) { return s.checks; })
         }).catch(function () {});
         tracking.then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
+    }
+
+    // Build the run card INSIDE the modal and render the "Updates running" reopen button next to the
+    // widget heading. Shared by a fresh run and a resumed run. `show` opens the popup straight away
+    // (a fresh run the user just confirmed); a resumed run passes false so nothing pops up on its own,
+    // so the run plays out in the background and the user opens it via the reopen button. The card's
+    // own dismiss is hidden while running (CSS) and appears once the run is done to clear it.
+    function mountRun(host, trigger, sites, checkSites, single, total, show) {
+        if (!modalNode || !modalNode.parentNode) { modalNode = buildModalNode(); }
+        clearModalContent();
+        modalNode.classList.remove('small');
+        modalNode.classList.add('wcd-run-modal');
+        var content = el('div', { class: 'content wcd-run-modalbody' });
+        modalNode.appendChild(content);
+        // Keep-open warning: while a run is in flight the popup cannot be closed (the close icon is
+        // hidden and the close is vetoed), so this explains why and is removed once the run finishes.
+        var warning = el('div', { class: 'ui warning message wcd-run-warning' }, [
+            el('i', { class: 'exclamation triangle icon' }),
+            el('span', { text: t('keepOpenWarning') })
+        ]);
+        var run = buildRun(content, sites, checkSites, single, total);
+        // Place the warning directly under the run card header (between the head band and the timeline).
+        run.card.insertBefore(warning, run.head.nextSibling);
+        run.trigger = trigger;
+        run.host = host;
+        run.warning = warning;
+        run.dismiss.addEventListener('click', function () { if (!run.dismiss.disabled) { closeRun(run); } });
+        activeRunRef = run;
+        // Green, matching the launch CTA, so a running reopen reads as the same "go" action.
+        renderReopenButton(run, 'green', 'sync loading icon', t('reopenRunning'));
+        if (show) { reopenModal(); }
+        return run;
+    }
+
+    /* ── "Updates running" reopen button (next to the widget heading) ───────── */
+    // While the run popup is closed, this button keeps the run reachable: clicking it reopens the
+    // popup. It renders into the header slot (`.wcd-run-reopen-slot`) on the widget; on the Updates
+    // banner, which has no such slot, it falls back to the run-host below the banner.
+
+    function reopenSlot(run) {
+        return document.querySelector('.wcd-run-reopen-slot') || run.host || null;
+    }
+
+    // Render the reopen button. While running it is a plain "Updates running" button; once the run
+    // finishes it carries the verdict and a dismiss control to clear the run.
+    function renderReopenButton(run, cls, iconCls, text, withDismiss) {
+        var slot = reopenSlot(run);
+        if (!slot) { return; }
+        var btn = el('button', { class: 'ui small button wcd-reopen ' + cls, type: 'button' }, [
+            el('i', { class: iconCls }),
+            el('span', { text: text })
+        ]);
+        btn.addEventListener('click', reopenModal);
+        var children = [btn];
+        if (withDismiss) {
+            var dismiss = el('button', { class: 'ui small basic icon button wcd-reopen__dismiss', type: 'button' }, [el('i', { class: 'times icon' })]);
+            dismiss.addEventListener('click', function (e) { e.stopPropagation(); closeRun(run); });
+            children.push(dismiss);
+        }
+        run.reopen = { node: el('span', { class: 'wcd-reopen-wrap' }, children) };
+        slot.innerHTML = '';
+        slot.appendChild(run.reopen.node);
+    }
+
+    function removeReopenButton(run) {
+        var slot = reopenSlot(run);
+        if (slot) { slot.innerHTML = ''; }
+    }
+
+    /* ── Heartbeat: keep the run's server-side activity fresh while THIS tab drives it ─── */
+    // Runs independently of the awaited AJAX calls, so even a multi-minute synchronous update keeps
+    // the run from looking abandoned. A second tab only takes over once the heartbeat goes silent.
+    function startHeartbeat() {
+        stopHeartbeat();
+        // Send one immediately so this tab claims the run as its driver right away (a reload mid-run
+        // then matches instantly), not only after the first interval.
+        api('run_heartbeat', { driver: driverId() }).catch(function () {});
+        heartbeatTimer = window.setInterval(function () { api('run_heartbeat', { driver: driverId() }).catch(function () {}); }, HEARTBEAT_INTERVAL);
+    }
+    function stopHeartbeat() {
+        if (heartbeatTimer) { window.clearInterval(heartbeatTimer); heartbeatTimer = null; }
     }
 
     function runPhased(run) {
@@ -1127,6 +1251,7 @@
 
     function finishRun(run, flagged) {
         activeRun = false;
+        stopHeartbeat();
         setTriggerRunning(run.trigger, false);
         run.card.setAttribute('data-state', 'done');
         run.dismiss.disabled = false;
@@ -1152,6 +1277,12 @@
             ref.pill.textContent = f > 0 ? fmt(t('toReview'), { '%d': f }) : t('clean');
         });
         renderRunFooter(run, totalFlagged);
+        // Run finished: the card's dismiss now appears (single close), the keep-open warning goes
+        // away, and the reopen button shows the verdict (visible when the popup is closed).
+        if (run.warning && run.warning.parentNode) { run.warning.parentNode.removeChild(run.warning); }
+        var allGood = 0 === totalFlagged;
+        var verdict = allGood ? t('allGood') : fmt(1 === totalFlagged ? t('pageToReview') : t('pagesToReview'), { '%d': totalFlagged });
+        renderReopenButton(run, allGood ? 'is-ok' : 'is-flagged', (allGood ? 'check circle' : 'exclamation triangle') + ' icon', verdict, true);
     }
 
     function renderRunFooter(run, flagged) {
@@ -1194,6 +1325,8 @@
         if (run.rechecking) { return; }
         run.rechecking = true;
         activeRun = true;
+        startHeartbeat();
+        renderReopenButton(run, 'green', 'sync loading icon', t('reopenRunning'));
         setTriggerRunning(run.trigger, true);
         run.card.setAttribute('data-state', 'running');
         run.dismiss.disabled = true;
@@ -1215,64 +1348,153 @@
     }
 
     /* ─────────────────────── Resume an interrupted run ─────────────────── */
-    // The run state lives server-side (recorded by the AJAX endpoints as the run progresses). If
-    // the driving tab disappeared after updates were installed but before the post screenshots
-    // were dispatched, the next page load offers to take them now (or discard the run).
+    // The run state lives server-side (recorded by the AJAX endpoints as the run progresses). On any
+    // page that hosts the entry point, a still-active run is picked up automatically on load and
+    // continued at its persisted phase (the popup reopens). A run whose heartbeat is still fresh
+    // looks like another tab is driving it, so we leave it alone and re-check after a short window.
 
     function checkResume() {
+        if (activeRunRef) { return; }   // this tab already owns/drives a run
         var host = document.querySelector('.wcd-run-host');
-        if (!host || host.querySelector('.wcd-run')) { return; }
+        if (!host) { return; }
         api('run_status', {}).then(function (d) {
-            if (!d || !d.active || !d.stale || !(d.missing_post || []).length) { return; }
-            renderResumeNotice(host, (d.missing_post || []).length);
+            if (!d || !d.active) { hideResumePending(); return; }
+            // Take over driving immediately when this is THIS tab's own run (driver matches, e.g. a
+            // same-tab reload, no other tab can be driving it) or when the heartbeat has been silent
+            // long enough that no other tab is driving it.
+            var mine = d.driver && d.driver === driverId();
+            if (mine || d.resumable) { resumeRun(host, d); return; }
+            // Another tab may still be driving it: show the "Updates running" button + lock the CTA
+            // RIGHT NOW so the user cannot start a second run, and re-check until we may take over.
+            showResumePending(host, d);
+            scheduleResumeRecheck();
         }).catch(function () {});
     }
 
-    function renderResumeNotice(host, missingCount) {
-        var body = fmt(1 === missingCount ? t('resumeBodySingle') : t('resumeBodyPlural'), { '%d': String(missingCount) });
-        var resume = el('button', { class: 'ui small green button', type: 'button' }, [
-            el('i', { class: 'camera icon' }),
-            document.createTextNode(t('resumePost'))
-        ]);
-        var discard = el('button', { class: 'ui small basic button', type: 'button', text: t('discard') });
-        var box = el('div', { class: 'ui warning message wcd-resume' }, [
-            el('div', { class: 'header', text: t('resumeTitle') }),
-            el('p', { text: body }),
-            el('p', {}, [resume, discard])
-        ]);
-        resume.addEventListener('click', function () { startResume(host, box, resume); });
-        discard.addEventListener('click', function () {
-            api('run_discard', {}).catch(function () {});
-            if (box.parentNode) { box.parentNode.removeChild(box); }
-        });
-        host.appendChild(box);
+    function scheduleResumeRecheck() {
+        if (resumeRecheckTimer || activeRunRef) { return; }
+        resumeRecheckTimer = window.setTimeout(function () {
+            resumeRecheckTimer = null;
+            checkResume();
+        }, RESUME_RECHECK);
     }
 
-    function startResume(host, box, button) {
-        button.disabled = true;
-        api('run_resume_post', {}).then(function (d) {
-            if (box.parentNode) { box.parentNode.removeChild(box); }
-            if (d.warning) { window.alert(d.warning); }
-            var sites = d.sites || [];
-            var batches = d.batches || {};
-            if (!sites.length) { return; }
-            activeRun = true;
-            var single = 1 === sites.length;
-            var total = sites.reduce(function (n, s) { return n + (Number(s.checks) || 0); }, 0);
-            var run = buildRun(host, sites, sites, single, total);
-            run.dismiss.addEventListener('click', function () { if (!run.dismiss.disabled) { closeRun(run); } });
-            // Pre + updates already happened in the interrupted run; show them as done.
+    // Immediately surface that a run is in progress (driven by another tab, or not yet reclaimable):
+    // lock the launch CTA and show an "Updates running" button. Clicking it takes the run over in
+    // this tab (the user explicitly wants to see it) and opens the popup.
+    var resumePendingShown = false;
+    function showResumePending(host, state) {
+        setTriggerRunning(document.querySelector('.wcd-safe-update'), true);
+        var slot = document.querySelector('.wcd-run-reopen-slot') || host;
+        if (!slot) { return; }
+        var btn = el('button', { class: 'ui small green button wcd-reopen', type: 'button' }, [
+            el('i', { class: 'sync loading icon' }),
+            el('span', { text: t('reopenRunning') })
+        ]);
+        btn.addEventListener('click', function () {
+            if (activeRunRef) { reopenModal(); return; }
+            resumeRun(host, state);
+        });
+        slot.innerHTML = '';
+        slot.appendChild(el('span', { class: 'wcd-reopen-wrap', 'data-pending': '1' }, [btn]));
+        resumePendingShown = true;
+    }
+
+    function hideResumePending() {
+        if (!resumePendingShown) { return; }
+        resumePendingShown = false;
+        var pending = document.querySelector('.wcd-reopen-wrap[data-pending]');
+        if (pending && pending.parentNode) { pending.parentNode.innerHTML = ''; }
+        setTriggerRunning(document.querySelector('.wcd-safe-update'), false);
+    }
+
+    // Rebuild the run card from the persisted state and continue at its phase. The tracked sites are
+    // exactly the run's check sites (run_start only records sites with checks).
+    function resumeRun(host, state) {
+        if (activeRunRef || activeRun) { return; }   // a takeover is already under way in this tab
+        var sites = (state.sites || []).map(function (s) {
+            return { site_id: parseInt(s.site_id, 10), name: s.name || '', checks: Number(s.checks) || 0 };
+        }).filter(function (s) { return s.site_id; });
+        if (!sites.length) { return; }
+
+        activeRun = true;
+        resumePendingShown = false;   // the live run card now owns the slot
+        var single  = 1 === sites.length;
+        var total   = sites.reduce(function (n, s) { return n + s.checks; }, 0);
+        var trigger = document.querySelector('.wcd-safe-update');
+        setTriggerRunning(trigger, true);   // disable the CTA so a re-click cannot wipe the resumed card
+        // A resumed run plays out in the background: do NOT pop the modal open on its own. The
+        // "Updates running" button next to the widget heading lets the user open it when they want.
+        var run = mountRun(host, trigger, sites, sites, single, total, false);
+        startHeartbeat();
+
+        run.preBatches = values(state.pre_batches || {});
+        var updated    = (state.updated_sites || []).map(Number);
+        var notUpdated = sites.filter(function (s) { return updated.indexOf(s.site_id) === -1; });
+
+        // POST: pre + updates already ran. Let the server take any missing post screenshots (it
+        // re-purges the now-stale caches) and poll them in.
+        if ('post' === state.phase) {
+            setPhase(run, 2);
             setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
-            run.preBatches = values(d.pre_batches || {});
-            runPostPhase(run, batches).catch(function (e) { failRun(run, e); });
-        }).catch(function (e) {
-            button.disabled = false;
-            window.alert(e.message);
+            api('run_resume_post', {}).then(function (d) {
+                if (d.warning) { window.alert(d.warning); }
+                run.preBatches = values(d.pre_batches || {});
+                return runPostPhase(run, d.batches || {});
+            }).catch(function (e) { failRun(run, e); });
+            return;
+        }
+
+        // UPDATES: pre done; finish the remaining updates, then post.
+        if ('updates' === state.phase) {
+            setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
+            resumeUpdatesThenPost(run, sites, notUpdated).catch(function (e) { failRun(run, e); });
+            return;
+        }
+
+        // PRE (default): finish the pre screenshots (take any still missing, poll all), then continue.
+        setPhase(run, 0);
+        var preBatchBySite = {};
+        Object.keys(state.pre_batches || {}).forEach(function (k) { preBatchBySite[k] = state.pre_batches[k]; });
+        var missingPre = sites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
+        var ensurePre = missingPre.length
+            ? api('take_pre', { site_ids: missingPre }).then(function (d) {
+                Object.keys(d.batches || {}).forEach(function (k) { preBatchBySite[k] = d.batches[k]; });
+            })
+            : Promise.resolve();
+        ensurePre.then(function () {
+            run.preBatches = values(preBatchBySite);
+            setShot(run.pre, { queue: total, processing: 0, done: 0, failed: 0 });
+            return pollBatches(values(preBatchBySite), function (data) {
+                setShot(run.pre, data);
+                setSiteCounts(run, preBatchBySite, data.by_batch);
+                setFill(run, (total ? (data.done || 0) / total : 1) / 3);
+            });
+        }).then(function (final) {
+            setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
+            return resumeUpdatesThenPost(run, sites, notUpdated);
+        }).catch(function (e) { failRun(run, e); });
+    }
+
+    // Shared tail for a resumed run: update the not-yet-updated sites, then take + poll the post phase.
+    function resumeUpdatesThenPost(run, sites, notUpdated) {
+        setPhase(run, 1);
+        setFill(run, 1 / 3);
+        return runUpdatesSequential(notUpdated).then(function () {
+            setPhase(run, 2);
+            setFill(run, 2 / 3);
+            setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
+            return api('take_post', { site_ids: sites.map(function (s) { return s.site_id; }) });
+        }).then(function (d) {
+            // Every post batch is dispatched: stop tracking (the rest finishes server-side).
+            api('run_discard', {}).catch(function () {});
+            return runPostPhase(run, d.batches || {});
         });
     }
 
     function failRun(run, e) {
         activeRun = false;
+        stopHeartbeat();
         setTriggerRunning(run.trigger, false);
         run.card.setAttribute('data-state', 'error');
         run.dismiss.disabled = false;
@@ -1286,15 +1508,30 @@
         });
         run.foot.innerHTML = '';
         run.foot.appendChild(el('p', { class: 'wcd-error', text: e && e.message ? e.message : t('genericError') }));
+        if (run.warning && run.warning.parentNode) { run.warning.parentNode.removeChild(run.warning); }
+        renderReopenButton(run, 'is-failed', 'exclamation triangle icon', t('phaseFailed'), true);
     }
 
+    // Dismiss a finished/failed run: remove its card + reopen button, close the popup, and drop any
+    // lingering server-side state so it never re-opens on the next page load. Only reachable once the
+    // run is no longer in flight (the card's own dismiss appears in its final state).
     function closeRun(run) {
-        if (run.card && run.card.parentNode) { run.card.parentNode.removeChild(run.card); }
+        stopHeartbeat();
+        removeReopenButton(run);
+        activeRunRef = null;
+        activeRun = false;
+        setTriggerRunning(run.trigger, false);
+        clearModalContent();
+        closeModal();
+        api('run_discard', {}).catch(function () {});
     }
 
     // Reflect the run state on the launch CTA (spinner + disabled while a run is active).
     function setTriggerRunning(trigger, running) {
         if (!trigger) { return; }
+        // Idempotent: never re-capture the restore label while already running (a second true call
+        // would save the "running" label as the restore value and never recover the original).
+        if (running === trigger.classList.contains('is-running')) { return; }
         trigger.classList.toggle('is-running', running);
         trigger.disabled = running;
         var icon = trigger.querySelector('i.icon');
@@ -1321,9 +1558,12 @@
 
     /* ───────────────────────── Hero banner stats ───────────────────────── */
 
-    // Fill the banner's Pages/Checks once the dashboard has rendered (kept off the page-load path).
+    // Fill the Pages/Checks stats once the dashboard has rendered (kept off the page-load path).
+    // Matches the Updates-page hero banner (.wcd-hero) and the dashboard safe-update widget
+    // (the [data-stats-scope] container inside its mainwp-scrolly-overflow); both carry
+    // data-stats-scope. At most one exists per page.
     function loadBannerStats() {
-        var hero = document.querySelector('.wcd-hero[data-stats-scope]');
+        var hero = document.querySelector('[data-stats-scope]');
         if (!hero) { return; }
         var pages = hero.querySelector('[data-role="pages"]');
         var checks = hero.querySelector('[data-role="checks"]');
@@ -1560,10 +1800,28 @@
     });
 
     document.addEventListener('click', function (e) {
+        var tokenToggle = e.target.closest && e.target.closest('.wcd-token-toggle');
+        var tokenReset = e.target.closest && e.target.closest('.wcd-token-reset');
         var configure = e.target.closest && e.target.closest('.wcd-configure-urls');
         var safe = e.target.closest && e.target.closest('.wcd-safe-update');
         var activateAll = e.target.closest && e.target.closest('.wcd-activate-all');
 
+        if (tokenReset) {
+            // Submit button inside the reset form: veto the submit unless the user confirms.
+            if (!window.confirm(t('resetConfirm'))) { e.preventDefault(); }
+            return;
+        }
+        if (tokenToggle) {
+            e.preventDefault();
+            var tokenInput = document.getElementById('wcd_api_token');
+            if (tokenInput) {
+                var reveal = tokenInput.type === 'password';
+                tokenInput.type = reveal ? 'text' : 'password';
+                var icon = tokenToggle.querySelector('i');
+                if (icon) { icon.className = reveal ? 'eye slash icon' : 'eye icon'; }
+            }
+            return;
+        }
         if (activateAll) { e.preventDefault(); if (!activateAll.disabled) { onActivateAll(); } return; }
         if (configure) { e.preventDefault(); onConfigureUrls(configure); return; }
         if (safe) {
