@@ -23,6 +23,31 @@ class WCD_MainWP_API {
 	// the x-wcd-managed-by header on sync; see the API's website_managed_by enum.
 	const MANAGED_BY = 'mainwp';
 
+	// The group fields the add-on may send to the API on create + update. Shared by create_group()
+	// and update_group() so the two allow-lists can never drift; any new group field must be added
+	// here or array_intersect_key silently drops it. Server-side, a field is only written when it is
+	// present in the request (see the API's GroupRequest "sometimes" rules), so omitting a key leaves
+	// the stored value unchanged.
+	const GROUP_FIELDS = array(
+		'name',
+		'monitoring',
+		'enabled',
+		'hour_of_day',
+		'interval_in_h',
+		'alert_emails',
+		'css',
+		'js',
+		'threshold',
+		'cms',
+		'screenshot_region',
+		'screenshot_delay',
+		'basic_auth_user',
+		'basic_auth_password',
+		'proxy_type',
+		'default_desktop',
+		'default_mobile',
+	);
+
 	/**
 	 * Resolve the API base URL. Supports both override constants (WCD_API_URL and the
 	 * historical WCD_API_URL_V2 used by .wp-env.json). Trailing slash is trimmed.
@@ -194,8 +219,7 @@ class WCD_MainWP_API {
 	 * @return array Normalized API result.
 	 */
 	public static function create_group( array $args, string $api_token = '' ): array {
-		$allowed = array( 'name', 'monitoring', 'enabled', 'hour_of_day', 'interval_in_h', 'alert_emails', 'css', 'js', 'threshold', 'cms' );
-		$body    = array_intersect_key( $args, array_flip( $allowed ) );
+		$body = array_intersect_key( $args, array_flip( self::GROUP_FIELDS ) );
 
 		return self::request( 'POST', '/groups', $body, $api_token );
 	}
@@ -204,15 +228,27 @@ class WCD_MainWP_API {
 	 * Update a group (e.g. its name). Only known fields are forwarded.
 	 *
 	 * @param string $group_id  Group UUID.
-	 * @param array  $args      Group fields to update (same allow-list as create_group()).
+	 * @param array  $args      Group fields to update (allow-list: self::GROUP_FIELDS).
 	 * @param string $api_token Bearer token; falls back to the stored token.
 	 * @return array Normalized API result.
 	 */
 	public static function update_group( string $group_id, array $args, string $api_token = '' ): array {
-		$allowed = array( 'name', 'monitoring', 'enabled', 'hour_of_day', 'interval_in_h', 'alert_emails', 'css', 'js', 'threshold', 'cms' );
-		$body    = array_intersect_key( $args, array_flip( $allowed ) );
+		$body = array_intersect_key( $args, array_flip( self::GROUP_FIELDS ) );
 
 		return self::request( 'PUT', '/groups/' . rawurlencode( $group_id ), $body, $api_token );
+	}
+
+	/**
+	 * Get a single group (its on-demand capture settings, screenshot region, threshold, etc.).
+	 * Used to prefill the per-site On-Demand check settings modal. The password is never returned by
+	 * the API; the `has_basic_auth` boolean in the resource signals whether one is stored.
+	 *
+	 * @param string $group_id  Group UUID.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function get_group( string $group_id, string $api_token = '' ): array {
+		return self::request( 'GET', '/groups/' . rawurlencode( $group_id ), array(), $api_token );
 	}
 
 	/**

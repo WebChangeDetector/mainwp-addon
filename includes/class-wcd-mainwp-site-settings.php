@@ -72,6 +72,13 @@ class WCD_MainWP_Site_Settings {
 		$map   = WCD_MainWP_Site_Map::all();
 
 		include WCD_MAINWP_PLUGIN_PATH . 'templates/sites-settings-page.php';
+
+		// The per-site On-Demand settings modal is one reused instance; the JS fills its values on
+		// open. Only included when a token is configured (the template above returns early otherwise,
+		// so no enabled sites exist to open it).
+		if ( '' !== $token ) {
+			include WCD_MAINWP_PLUGIN_PATH . 'templates/site-settings-modal.php';
+		}
 	}
 
 	/**

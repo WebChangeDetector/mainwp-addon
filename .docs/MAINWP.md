@@ -68,7 +68,8 @@ webchangedetector-for-mainwp/
 │   ├── entry-banner.php           # Hero banner (native Updates page only) -> safe-update flow
 │   ├── runs-view.php              # Checks tab body (Fomantic filter bar; chrome + tabs from the page shell)
 │   ├── run-view.php               # Run tab body -> safe-update widget body (full-page panel)
-│   └── sites-settings-page.php    # Settings tab body: enable sites + URL selection
+│   ├── sites-settings-page.php    # Settings tab body: enable sites + URL selection + per-site Settings button
+│   └── site-settings-modal.php    # Per-site On-Demand check settings modal (one reused Fomantic modal)
 ├── assets/css/wcd-mainwp.css      # All component styles (+ .wcd-w-* width steps + the Checks-tab styles scoped to .wcd-runs, no inline CSS)
 └── assets/js/wcd-mainwp.js        # Settings + safe-update orchestrator + results + runs overview
 ```
@@ -95,9 +96,11 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 - API token option: **`wcd_api_token`** (network-aware via `WCD_MainWP_Options`). Verified on save by
   calling `/account`; the account is cached in the `wcd_mainwp_account_details` transient (5 min; own prefix so it never collides with the customer plugin's `wcd_account_details` on the same site).
 - Site map option: **`wcd_site_map`** = `{ site_id: { website_uuid, manual_group_uuid,
-  auto_group_uuid, domain, enabled } }`. The `domain` is normalized once (scheme + trailing slash
-  stripped, www + path kept) and reused verbatim for every WCD call (the API resolves websites by
-  exact domain match).
+  auto_group_uuid, domain, enabled, screenshot_region } }`. The `domain` is normalized once (scheme +
+  trailing slash stripped, www + path kept) and reused verbatim for every WCD call (the API resolves
+  websites by exact domain match). `screenshot_region` is the user's per-site choice (`us`, `eu` or
+  `auto`; default `auto`), stored so it survives re-provisioning; the value sent on group create and
+  via the `save_site_settings` AJAX action (the per-site On-Demand settings modal).
 - Active-run state: **`wcd_mainwp_active_run`** = the tracked safe-update run (sites, phase,
   pre/post batches, updated sites, last_activity) used for the resume flow; cleared when the run's
   post phase is fully dispatched.
@@ -118,7 +121,9 @@ Client: `WCD_MainWP_API` (`includes/class-wcd-mainwp-api.php`), all static. Base
 constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-plugin`. Every method returns
 `['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`.
 
-Methods: `get_account`, `list_groups`, `create_group`, `get_group_urls`, `update_url_in_group`,
+Methods: `get_account`, `list_groups`, `create_group`, `update_group`, `get_group` (single group,
+on-demand settings prefill; the password is never returned, `has_basic_auth` signals it is set),
+`get_group_urls`, `update_url_in_group`,
 `update_urls_in_group`, `select_all_urls_in_group` (toggles one device for ALL group urls in one
 `PUT /groups/{id}/urls/select-all` call, a single SQL UPDATE server-side — used by the "select all"
 toggles so large sites stay fast), `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
@@ -311,7 +316,32 @@ The four tab bodies:
 - **Run** (`render_run_page` -> `run-view.php`): the safe-update entry-point panel (bulk scope).
 - **Checks** (`render_page` -> `runs-view.php`): the On-Demand runs list (see below).
 - **Settings** (`WCD_MainWP_Site_Settings::render_sites_settings_page` -> `sites-settings-page.php`):
-  per-site enable toggles + URL selection.
+  per-site enable toggles + URL selection + a per-site **Settings** button (disabled until the site is
+  enabled; mirrors the Configure URLs button). The button opens the per-site **On-Demand check settings
+  modal** (`templates/site-settings-modal.php`), a single server-rendered native Fomantic `ui modal`
+  reused for every site (the JS fills its values on open). It mirrors the webapp's On-Demand (manual)
+  website settings, scoped to the fields that apply to MainWP sites:
+  - Top: **Screenshot region** (`screenshot_region` auto/us/eu), **Activate newly synced URLs by
+    default** Desktop (`default_desktop`) + Mobile (`default_mobile`), **Difference threshold**
+    (`threshold`).
+  - Advanced (a collapsible Fomantic `ui accordion`): **Basic Auth** username (`basic_auth_user`) +
+    password (`basic_auth_password`), **Static IP proxy** toggle (`proxy_type`), **Screenshot delay**
+    (`screenshot_delay`, 7 to 60 seconds, empty allowed), **CSS injection** (`css`), **JS injection**
+    (`js`).
+  - Excluded on purpose: website name, all monitoring/schedule fields, all WP-plugin settings.
+
+  The modal loads via the `get_site_settings` AJAX action (one `GET /groups/{id}` on the site's manual
+  group) and saves via `save_site_settings`. `save_site_settings` writes the capture settings to the
+  **manual** group via `update_group`, writes `screenshot_region` to **both** groups (manual + auto)
+  and persists it via `WCD_MainWP_Site_Map::set_region()`. The API owns sibling-sync and resolving
+  `auto` to a concrete region, so the addon does not loop or poll. Per-field contract (the API writes
+  a field only when present in the request): `proxy_type` is `static` when on / `none` when off (never
+  `''`); `screenshot_delay` is clamped 7 to 60, or the key is omitted when the field is empty;
+  `basic_auth_password` is **sent to set, sent as `''` to clear** (the modal's "Remove password"
+  checkbox), or **omitted to leave unchanged** (there is no `basic_auth_password_action` field on the
+  API). The password is never returned by the API; the modal uses the `has_basic_auth` boolean to show
+  a "password is stored" hint with a blank field. `css`/`js` are stored verbatim (only unslashed). The
+  region value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`).
 - **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): API token,
   auto-enable toggle, plan/credits card. Saving the token redirects back to this tab.
 

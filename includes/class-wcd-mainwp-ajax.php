@@ -35,6 +35,8 @@ class WCD_MainWP_Ajax {
 			'toggle_site',
 			'sync_urls',
 			'get_site_urls',
+			'get_site_settings',
+			'save_site_settings',
 			'update_url',
 			'update_all_urls',
 			'banner_stats',
@@ -282,6 +284,168 @@ class WCD_MainWP_Ajax {
 		}
 
 		wp_send_json_success( $payload );
+	}
+
+	/**
+	 * Read a site's On-Demand (manual) check settings to prefill the per-site settings modal. One
+	 * site per request, one GET on the manual group. The password is never returned by the API; the
+	 * `has_basic_auth` boolean signals whether a password is stored so the modal can show a "set"
+	 * state with a blank field.
+	 *
+	 * @return void
+	 */
+	public static function get_site_settings(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$site_id = self::site_id();
+
+		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+		if ( '' === $group_id ) {
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$response = WCD_MainWP_API::get_group( $group_id, self::token() );
+		if ( ! $response['ok'] ) {
+			self::reject_if_group_gone( $site_id, $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$group = self::unwrap( $response['data'] );
+		$group = is_array( $group ) ? $group : array();
+
+		// off => the API stores 'none' (or empty for older rows); any other value (e.g. 'static') is on.
+		// The add-on exposes a binary toggle (none/static), so a group set to 'residential' elsewhere
+		// (e.g. the webapp) prefills as on and saving writes 'static'. That downgrade is intentional
+		// under this binary contract, not a bug.
+		$proxy_type = (string) ( $group['proxy_type'] ?? 'none' );
+
+		wp_send_json_success(
+			array(
+				// The region the user picked is owned by the site map; the API stores the resolved
+				// value, so prefer the API value and fall back to the stored choice.
+				'screenshot_region' => WCD_MainWP_Site_Map::sanitize_region( $group['screenshot_region'] ?? WCD_MainWP_Site_Map::get_region( $site_id ) ),
+				'default_desktop'   => ! empty( $group['default_desktop'] ),
+				'default_mobile'    => ! empty( $group['default_mobile'] ),
+				'threshold'         => isset( $group['threshold'] ) ? (float) $group['threshold'] : 0,
+				'basic_auth_user'   => (string) ( $group['basic_auth_user'] ?? '' ),
+				// Password is never returned; this flag drives the "password is set" hint.
+				'has_basic_auth'    => ! empty( $group['has_basic_auth'] ),
+				'proxy_on'          => '' !== $proxy_type && 'none' !== $proxy_type,
+				'screenshot_delay'  => isset( $group['screenshot_delay'] ) && '' !== $group['screenshot_delay'] ? (int) $group['screenshot_delay'] : '',
+				'css'               => (string) ( $group['css'] ?? '' ),
+				'js'                => (string) ( $group['js'] ?? '' ),
+			)
+		);
+	}
+
+	/**
+	 * Save a site's On-Demand (manual) check settings from the per-site settings modal. The capture
+	 * settings are written to the MANUAL group; the screenshot region is written to BOTH groups
+	 * (manual + auto) and persisted in the site map (the API owns sibling-sync + resolving 'auto'
+	 * to a concrete region, so no loop or poll here). One site per request.
+	 *
+	 * Per-field contract (see the API's GroupRequest "sometimes" rules):
+	 * - A field is only written when present in the request, so we omit a key to leave it unchanged.
+	 * - basic_auth_password: send a value to SET, send '' to CLEAR (the modal's "Remove password"
+	 *   flag), OMIT the key to leave unchanged. There is no password_action field on the API.
+	 * - proxy_type: 'static' when on, 'none' when off (never '').
+	 * - screenshot_delay: integer clamped 7-60, or omitted when the field is left empty.
+	 *
+	 * @return void
+	 */
+	public static function save_site_settings(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$site_id = self::site_id();
+
+		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$entry     = WCD_MainWP_Site_Map::for_site( $site_id );
+		$manual_id = (string) ( $entry['manual_group_uuid'] ?? '' );
+		if ( '' === $manual_id ) {
+			wp_send_json_error( array( 'message' => __( 'Site is not enabled.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$region = isset( $_POST['screenshot_region'] )
+			? WCD_MainWP_Site_Map::sanitize_region( sanitize_text_field( wp_unslash( $_POST['screenshot_region'] ) ) )
+			: WCD_MainWP_Site_Map::DEFAULT_REGION;
+
+		// Capture settings written to the manual group. The region is included here AND mirrored to
+		// the auto group below (so both detection groups carry the choice).
+		$fields = array(
+			'screenshot_region' => $region,
+			'default_desktop'   => ! empty( $_POST['default_desktop'] ) && 'false' !== $_POST['default_desktop'],
+			'default_mobile'    => ! empty( $_POST['default_mobile'] ) && 'false' !== $_POST['default_mobile'],
+			'basic_auth_user'   => isset( $_POST['basic_auth_user'] ) ? sanitize_text_field( wp_unslash( $_POST['basic_auth_user'] ) ) : '',
+			// off => 'none', on => 'static'. Never send '' (the API enum is none|static|residential).
+			'proxy_type'        => ( ! empty( $_POST['proxy_on'] ) && 'false' !== $_POST['proxy_on'] ) ? 'static' : 'none',
+		);
+
+		if ( isset( $_POST['threshold'] ) ) {
+			$fields['threshold'] = (float) sanitize_text_field( wp_unslash( $_POST['threshold'] ) );
+		}
+
+		// screenshot_delay: empty leaves it unchanged (omit the key); a value is clamped 7-60.
+		$delay_raw = isset( $_POST['screenshot_delay'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['screenshot_delay'] ) ) ) : '';
+		if ( '' !== $delay_raw ) {
+			$fields['screenshot_delay'] = max( 7, min( 60, (int) $delay_raw ) );
+		}
+
+		// css / js are stored verbatim (the API/webapp keep them as-is). Only unslash; do not strip
+		// or escape the user's stylesheet/script.
+		if ( isset( $_POST['css'] ) ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Raw CSS stored verbatim; matches the API/webapp contract.
+			$fields['css'] = (string) wp_unslash( $_POST['css'] );
+		}
+		if ( isset( $_POST['js'] ) ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Raw JS stored verbatim; matches the API/webapp contract.
+			$fields['js'] = (string) wp_unslash( $_POST['js'] );
+		}
+
+		// Basic Auth password: SET (value), CLEAR ('' via the remove flag) or leave unchanged (omit).
+		$clear_password = ! empty( $_POST['basic_auth_password_clear'] ) && 'false' !== $_POST['basic_auth_password_clear'];
+		$password       = isset( $_POST['basic_auth_password'] ) ? sanitize_text_field( wp_unslash( $_POST['basic_auth_password'] ) ) : '';
+		if ( $clear_password ) {
+			$fields['basic_auth_password'] = '';
+		} elseif ( '' !== $password ) {
+			$fields['basic_auth_password'] = $password;
+		}
+
+		$token = self::token();
+
+		$response = WCD_MainWP_API::update_group( $manual_id, $fields, $token );
+		if ( ! $response['ok'] ) {
+			self::reject_if_group_gone( $site_id, $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		// Region to the sibling (auto) group too, so both groups carry the choice (same pattern the
+		// old set_region used). The API mirrors + resolves 'auto' itself, so this is the only write.
+		$auto_id = (string) ( $entry['auto_group_uuid'] ?? '' );
+		if ( '' !== $auto_id ) {
+			$auto = WCD_MainWP_API::update_group( $auto_id, array( 'screenshot_region' => $region ), $token );
+			if ( ! $auto['ok'] ) {
+				self::reject_if_group_gone( $site_id, $auto );
+				wp_send_json_error( array( 'message' => $auto['error'] ) );
+			}
+		}
+
+		WCD_MainWP_Site_Map::set_region( $site_id, $region );
+
+		wp_send_json_success(
+			array(
+				'screenshot_region' => $region,
+				// Additive: reflects only what this save changed about the stored password. Cleared =>
+				// false; a new password was sent => true. When neither (left unchanged) the prior state
+				// is unknown without re-reading, so the key is omitted and the next modal open re-reads
+				// the authoritative has_basic_auth from the API.
+				'has_basic_auth'    => $clear_password ? false : ( isset( $fields['basic_auth_password'] ) ? true : null ),
+			)
+		);
 	}
 
 	/**

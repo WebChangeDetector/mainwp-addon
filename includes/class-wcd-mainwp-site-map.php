@@ -21,6 +21,12 @@ class WCD_MainWP_Site_Map {
 
 	const OPTION_KEY = 'wcd_site_map';
 
+	// Allowed screenshot region values. 'auto' (default) lets the API geolocate the site and pick the
+	// nearest region; 'us'/'eu' pin it. The API owns resolving 'auto' to a concrete value.
+	const REGIONS = array( 'us', 'eu', 'auto' );
+
+	const DEFAULT_REGION = 'auto';
+
 	/**
 	 * Normalize a site URL the same way the WCD API expects: strip the scheme and any trailing
 	 * slash, keep www + path. Mirrors the webapp's mm_normalize_domain.
@@ -98,6 +104,39 @@ class WCD_MainWP_Site_Map {
 	 */
 	public static function get_domain( int $site_id ): string {
 		return (string) ( self::for_site( $site_id )['domain'] ?? '' );
+	}
+
+	/**
+	 * The stored screenshot region for a site (the user's choice). Defaults to 'auto' for sites that
+	 * predate the per-site selector. This is the chosen value, not necessarily the resolved one (the
+	 * API resolves 'auto' to a concrete 'us'/'eu' asynchronously).
+	 *
+	 * @param int $site_id MainWP site id.
+	 * @return string One of 'us', 'eu', 'auto'.
+	 */
+	public static function get_region( int $site_id ): string {
+		return self::sanitize_region( self::for_site( $site_id )['screenshot_region'] ?? self::DEFAULT_REGION );
+	}
+
+	/**
+	 * Constrain an arbitrary value to a valid screenshot region, falling back to the default.
+	 *
+	 * @param mixed $value The candidate region value.
+	 * @return string One of 'us', 'eu', 'auto'.
+	 */
+	public static function sanitize_region( $value ): string {
+		return in_array( $value, self::REGIONS, true ) ? (string) $value : self::DEFAULT_REGION;
+	}
+
+	/**
+	 * Persist a site's chosen screenshot region. The value is constrained to a valid region.
+	 *
+	 * @param int    $site_id MainWP site id.
+	 * @param string $region  The chosen region ('us', 'eu' or 'auto').
+	 * @return void
+	 */
+	public static function set_region( int $site_id, string $region ): void {
+		self::save_site( $site_id, array( 'screenshot_region' => self::sanitize_region( $region ) ) );
 	}
 
 	/**
@@ -180,6 +219,9 @@ class WCD_MainWP_Site_Map {
 		$manual_id  = (string) ( $existing['manual_group_uuid'] ?? '' );
 		$auto_id    = (string) ( $existing['auto_group_uuid'] ?? '' );
 		$website_id = (string) ( $existing['website_uuid'] ?? '' );
+		// The user's chosen region (default 'auto'). Sent on provision so the new groups carry the
+		// choice from the start; set_region updates it later without re-provisioning.
+		$region = self::sanitize_region( $existing['screenshot_region'] ?? self::DEFAULT_REGION );
 
 		// Already provisioned: keep the group names consistent (pure domain) and flip the flag on.
 		if ( '' !== $manual_id && '' !== $website_id ) {
@@ -224,10 +266,11 @@ class WCD_MainWP_Site_Map {
 		if ( '' === $manual_id ) {
 			$manual    = WCD_MainWP_API::create_group(
 				array(
-					'name'       => $domain,
-					'monitoring' => false,
-					'enabled'    => true,
-					'cms'        => 'wordpress',
+					'name'              => $domain,
+					'monitoring'        => false,
+					'enabled'           => true,
+					'cms'               => 'wordpress',
+					'screenshot_region' => $region,
 				),
 				$api_token
 			);
@@ -250,10 +293,11 @@ class WCD_MainWP_Site_Map {
 		if ( '' === $auto_id ) {
 			$auto    = WCD_MainWP_API::create_group(
 				array(
-					'name'       => $domain,
-					'monitoring' => true,
-					'enabled'    => true,
-					'cms'        => 'wordpress',
+					'name'              => $domain,
+					'monitoring'        => true,
+					'enabled'           => true,
+					'cms'               => 'wordpress',
+					'screenshot_region' => $region,
 				),
 				$api_token
 			);
@@ -289,6 +333,7 @@ class WCD_MainWP_Site_Map {
 				'auto_group_uuid'   => $auto_id,
 				'domain'            => $domain,
 				'enabled'           => true,
+				'screenshot_region' => $region,
 			)
 		);
 

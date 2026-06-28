@@ -5,9 +5,9 @@
  * Provided by WCD_MainWP_Site_Settings::render_sites_settings_page(); the extension page shell
  * (templates/admin-page.php) supplies the MainWP chrome + tab switcher.
  *
- * @var string $token Stored API token.
- * @var array  $sites Managed MainWP sites [ id => [ id, url, name, domain ] ].
- * @var array  $map   Stored site map [ id => [ enabled, ... ] ].
+ * @var string $token   Stored API token.
+ * @var array  $sites   Managed MainWP sites [ id => [ id, url, name, domain ] ].
+ * @var array  $map     Stored site map [ id => [ enabled, ... ] ].
  *
  * @package WebChangeDetector_MainWP
  */
@@ -67,6 +67,9 @@ if ( '' === $token ) {
 						<div class="wcd-site-actions">
 							<button type="button" class="ui mini button wcd-configure-urls" <?php disabled( ! $wcd_mainwp_enabled ); ?>>
 								<?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?>
+							</button>
+							<button type="button" class="ui mini button wcd-site-settings" <?php disabled( ! $wcd_mainwp_enabled ); ?>>
+								<?php esc_html_e( 'Settings', 'webchangedetector-for-mainwp' ); ?>
 							</button>
 						</div>
 					</div>

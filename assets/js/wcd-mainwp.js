@@ -216,14 +216,22 @@
     function cardOf(node) { return node.closest('.wcd-site'); }
     function siteIdOf(card) { return parseInt(card.getAttribute('data-site-id'), 10); }
 
+    // Flip a Fomantic checkbox from JS: keep the wrapper's `.checked` class in sync with the input,
+    // because MainWP's theme paints the toggle track from that class, not from input:checked.
+    function setToggleChecked(input, checked) {
+        input.checked = checked;
+        var wrap = input.closest('.ui.checkbox');
+        if (wrap) { wrap.classList.toggle('checked', checked); }
+    }
+
     // Reflect an enable/disable response in the card's DOM (toggle state, row buttons, URL count).
     // Returns a promise that resolves once any queued URL sync has been polled in, so bulk callers
     // can await the full sync before advancing to the next site.
     function applyEnabledState(card, enabled, data) {
         card.classList.toggle('wcd-on', enabled);
         var toggle = card.querySelector('.wcd-site-toggle');
-        if (toggle) { toggle.checked = enabled; }
-        card.querySelectorAll('.wcd-configure-urls').forEach(function (b) { b.disabled = !enabled; });
+        if (toggle) { setToggleChecked(toggle, enabled); }
+        card.querySelectorAll('.wcd-configure-urls, .wcd-site-settings').forEach(function (b) { b.disabled = !enabled; });
         var count = card.querySelector('[data-role="urlcount"]');
         if (enabled) {
             if (data && data.synced) {
@@ -282,7 +290,7 @@
                 if (count) { count.textContent = e.message; }
             });
         }).catch(function (e) {
-            checkbox.checked = !enabled;
+            setToggleChecked(checkbox, !enabled);
             if (enabled) { setSiteSyncing(card, false); }
             window.alert(e.message);
         }).finally(function () {
@@ -505,6 +513,161 @@
         var box = card.querySelector('[data-role="urlconfig"]');
         if (!box.hidden) { box.hidden = true; return; }
         loadUrls(card);
+    }
+
+    /* ───────────────────── Per-site On-Demand settings ──────────────────── */
+    // One reused server-rendered Fomantic modal (#wcd-site-settings-modal). It is freely closable
+    // (its own close icon + Cancel button), so it does NOT go through the run-only modal infra. The
+    // JS fills the fields from get_site_settings on open and writes them via save_site_settings.
+
+    function settingsModal() { return document.getElementById('wcd-site-settings-modal'); }
+
+    function showSettingsModal(modal) {
+        if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.modal === 'function') {
+            window.jQuery(modal).modal({ closable: true, observeChanges: true }).modal('show');
+        } else {
+            modal.classList.add('active', 'visible');
+        }
+    }
+
+    function hideSettingsModal(modal) {
+        if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.modal === 'function') {
+            window.jQuery(modal).modal('hide');
+        } else {
+            modal.classList.remove('active', 'visible');
+        }
+    }
+
+    function settingsField(modal, name) {
+        return modal.querySelector('[name="' + name + '"]');
+    }
+
+    function setCheckbox(input, checked) {
+        if (!input) { return; }
+        input.checked = !!checked;
+        var wrap = input.closest('.ui.checkbox');
+        if (wrap) { wrap.classList.toggle('checked', !!checked); }
+    }
+
+    // Fill the modal fields from the server payload. has_basic_auth drives the "password is set"
+    // hint + the "Remove password" affordance (the password itself is never returned).
+    function fillSettings(modal, data) {
+        var region = settingsField(modal, 'screenshot_region');
+        if (region) { region.value = data.screenshot_region || 'auto'; }
+        setCheckbox(settingsField(modal, 'default_desktop'), data.default_desktop);
+        setCheckbox(settingsField(modal, 'default_mobile'), data.default_mobile);
+        var threshold = settingsField(modal, 'threshold');
+        if (threshold) { threshold.value = (data.threshold !== undefined && data.threshold !== null) ? data.threshold : ''; }
+        var authUser = settingsField(modal, 'basic_auth_user');
+        if (authUser) { authUser.value = data.basic_auth_user || ''; }
+        var authPass = settingsField(modal, 'basic_auth_password');
+        if (authPass) { authPass.value = ''; }
+        setCheckbox(settingsField(modal, 'basic_auth_password_clear'), false);
+        setPasswordSetState(modal, !!data.has_basic_auth);
+        setCheckbox(settingsField(modal, 'proxy_on'), data.proxy_on);
+        var delay = settingsField(modal, 'screenshot_delay');
+        if (delay) { delay.value = (data.screenshot_delay !== undefined && data.screenshot_delay !== null) ? data.screenshot_delay : ''; }
+        var css = settingsField(modal, 'css');
+        if (css) { css.value = data.css || ''; }
+        var js = settingsField(modal, 'js');
+        if (js) { js.value = data.js || ''; }
+    }
+
+    function setPasswordSetState(modal, isSet) {
+        var hint = modal.querySelector('[data-role="passwordset"]');
+        var remove = modal.querySelector('[data-role="passwordremove"]');
+        if (hint) { hint.hidden = !isSet; }
+        if (remove) { remove.hidden = !isSet; }
+    }
+
+    function onSiteSettings(button) {
+        var card = cardOf(button);
+        var siteId = siteIdOf(card);
+        var modal = settingsModal();
+        if (!modal) { return; }
+
+        modal.setAttribute('data-site-id', String(siteId));
+        var loading = modal.querySelector('[data-role="loading"]');
+        var form = modal.querySelector('[data-role="form"]');
+        var error = modal.querySelector('[data-role="error"]');
+        // The Save control is type="button" and the JS reads fields by name (it never submits the
+        // form), so block any real form submission once: Enter must never trigger a full page reload,
+        // even if the field count ever drops below the browser's implicit-submit suppression.
+        if (form && !form.getAttribute('data-wcd-submit-guard')) {
+            form.setAttribute('data-wcd-submit-guard', '1');
+            form.addEventListener('submit', function (ev) { ev.preventDefault(); });
+        }
+        if (error) { error.hidden = true; error.textContent = ''; }
+        if (loading) { loading.hidden = false; }
+        if (form) { form.hidden = true; }
+        showSettingsModal(modal);
+
+        api('get_site_settings', { site_id: siteId }).then(function (data) {
+            fillSettings(modal, data);
+            if (loading) { loading.hidden = true; }
+            if (form) { form.hidden = false; }
+            // Init the accordion (collapsed) once the form is visible.
+            if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.accordion === 'function') {
+                window.jQuery(modal).find('.wcd-settings-advanced').accordion({ exclusive: false });
+            }
+            if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.dropdown === 'function') {
+                window.jQuery(modal).find('.ui.dropdown').dropdown();
+            }
+        }).catch(function (e) {
+            if (handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
+            if (loading) { loading.hidden = true; }
+            if (error) { error.hidden = false; error.textContent = e.message; }
+            if (form) { form.hidden = false; }
+        });
+    }
+
+    function onSaveSiteSettings(button) {
+        var modal = settingsModal();
+        if (!modal) { return; }
+        var siteId = parseInt(modal.getAttribute('data-site-id'), 10) || 0;
+        if (!siteId) { return; }
+        var card = document.querySelector('.wcd-site[data-site-id="' + siteId + '"]');
+        var error = modal.querySelector('[data-role="error"]');
+        if (error) { error.hidden = true; error.textContent = ''; }
+
+        var region = settingsField(modal, 'screenshot_region');
+        var threshold = settingsField(modal, 'threshold');
+        var authUser = settingsField(modal, 'basic_auth_user');
+        var authPass = settingsField(modal, 'basic_auth_password');
+        var clear = settingsField(modal, 'basic_auth_password_clear');
+        var delay = settingsField(modal, 'screenshot_delay');
+        var css = settingsField(modal, 'css');
+        var js = settingsField(modal, 'js');
+
+        var payload = {
+            site_id: siteId,
+            screenshot_region: region ? region.value : 'auto',
+            default_desktop: (settingsField(modal, 'default_desktop') || {}).checked ? 1 : 0,
+            default_mobile: (settingsField(modal, 'default_mobile') || {}).checked ? 1 : 0,
+            threshold: threshold ? threshold.value : '',
+            basic_auth_user: authUser ? authUser.value : '',
+            proxy_on: (settingsField(modal, 'proxy_on') || {}).checked ? 1 : 0,
+            screenshot_delay: delay ? delay.value : '',
+            css: css ? css.value : '',
+            js: js ? js.value : ''
+        };
+        // Password: send the value only when the user typed one; send the clear flag when "Remove
+        // password" is ticked. Otherwise omit both so the stored password is left unchanged.
+        if (clear && clear.checked) {
+            payload.basic_auth_password_clear = 1;
+        } else if (authPass && authPass.value !== '') {
+            payload.basic_auth_password = authPass.value;
+        }
+
+        button.disabled = true;
+        api('save_site_settings', payload).then(function () {
+            hideSettingsModal(modal);
+        }).catch(function (e) {
+            if (card && handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
+            if (error) { error.hidden = false; error.textContent = e.message; }
+        }).finally(function () {
+            button.disabled = false;
+        });
     }
 
     // start-sync is queued server-side; poll the group URLs until they appear.
@@ -1519,6 +1682,12 @@
         if (!e.target.classList) { return; }
         if (e.target.classList.contains('wcd-site-toggle')) {
             onToggleSite(e.target);
+        } else if (e.target.name === 'basic_auth_password_clear') {
+            // Ticking "Remove password" clears + disables the password input (the saved password
+            // will be removed); unticking re-enables it.
+            var modal = settingsModal();
+            var pass = modal ? settingsField(modal, 'basic_auth_password') : null;
+            if (pass) { if (e.target.checked) { pass.value = ''; } pass.disabled = e.target.checked; }
         }
     });
 
@@ -1769,6 +1938,9 @@
         var tokenToggle = e.target.closest && e.target.closest('.wcd-token-toggle');
         var tokenReset = e.target.closest && e.target.closest('.wcd-token-reset');
         var configure = e.target.closest && e.target.closest('.wcd-configure-urls');
+        var siteSettings = e.target.closest && e.target.closest('.wcd-site-settings');
+        var settingsSave = e.target.closest && e.target.closest('.wcd-settings-save');
+        var settingsCancel = e.target.closest && e.target.closest('.wcd-settings-cancel');
         var safe = e.target.closest && e.target.closest('.wcd-safe-update');
         var activateAll = e.target.closest && e.target.closest('.wcd-activate-all');
 
@@ -1790,6 +1962,9 @@
         }
         if (activateAll) { e.preventDefault(); if (!activateAll.disabled) { onActivateAll(); } return; }
         if (configure) { e.preventDefault(); onConfigureUrls(configure); return; }
+        if (siteSettings) { e.preventDefault(); if (!siteSettings.disabled) { onSiteSettings(siteSettings); } return; }
+        if (settingsCancel) { e.preventDefault(); var sm = settingsModal(); if (sm) { hideSettingsModal(sm); } return; }
+        if (settingsSave) { e.preventDefault(); onSaveSiteSettings(settingsSave); return; }
         if (safe) {
             e.preventDefault();
             // Disabled trigger (no pending updates): do nothing.
