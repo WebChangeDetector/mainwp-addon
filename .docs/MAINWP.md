@@ -337,11 +337,15 @@ The four tab bodies:
   `auto` to a concrete region, so the addon does not loop or poll. Per-field contract (the API writes
   a field only when present in the request): `proxy_type` is `static` when on / `none` when off (never
   `''`); `screenshot_delay` is clamped 7 to 60, or the key is omitted when the field is empty;
-  `basic_auth_password` is **sent to set, sent as `''` to clear** (the modal's "Remove password"
-  checkbox), or **omitted to leave unchanged** (there is no `basic_auth_password_action` field on the
-  API). The password is never returned by the API; the modal uses the `has_basic_auth` boolean to show
-  a "password is stored" hint with a blank field. `css`/`js` are stored verbatim (only unslashed). The
-  region value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`).
+  `basic_auth_password` is **present => write it** (non-empty SETs, empty string CLEARs) or **absent
+  => leave unchanged** (there is no `basic_auth_password_action` field on the API). The password is
+  never returned by the API; the modal uses the `has_basic_auth` boolean and the **webapp dots
+  convention**: when a password is stored the field is prefilled with a bullet sentinel (`••••••••`)
+  plus the hint "A password is stored. Clear this field to remove it, or type a new one to replace
+  it." The sentinel logic lives **only in the JS**, which sends `basic_auth_password` only when it
+  wants a change (unchanged dots => key omitted; cleared field => `''`; a new value => that value),
+  keeping the endpoint contract-simple. `css`/`js` are stored verbatim (only unslashed). The region
+  value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`).
 - **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): API token,
   auto-enable toggle, plan/credits card. Saving the token redirects back to this tab.
 

@@ -73,14 +73,11 @@ defined( 'ABSPATH' ) || exit;
 					<div class="field">
 						<label for="wcd-set-auth-pass"><?php esc_html_e( 'Basic Auth password', 'webchangedetector-for-mainwp' ); ?></label>
 						<input type="password" id="wcd-set-auth-pass" name="basic_auth_password" autocomplete="new-password" />
-						<small class="wcd-muted wcd-auth-pass-hint" data-role="passwordset" hidden><?php esc_html_e( 'A password is stored. Leave blank to keep it, type a new one to replace it.', 'webchangedetector-for-mainwp' ); ?></small>
-						<div class="ui checkbox wcd-auth-pass-remove" data-role="passwordremove" hidden>
-							<input type="checkbox" id="wcd-set-auth-pass-clear" name="basic_auth_password_clear" />
-							<label for="wcd-set-auth-pass-clear"><?php esc_html_e( 'Remove password', 'webchangedetector-for-mainwp' ); ?></label>
-						</div>
+						<small class="wcd-muted wcd-auth-pass-hint" data-role="passwordset" hidden><?php esc_html_e( 'A password is stored. Clear this field to remove it, or type a new one to replace it.', 'webchangedetector-for-mainwp' ); ?></small>
 					</div>
 
 					<div class="field">
+						<label><?php esc_html_e( 'Static IP proxy', 'webchangedetector-for-mainwp' ); ?></label>
 						<div class="ui toggle checkbox">
 							<input type="checkbox" id="wcd-set-proxy" name="proxy_on" />
 							<label for="wcd-set-proxy"><?php esc_html_e( 'Use static IP proxy', 'webchangedetector-for-mainwp' ); ?></label>

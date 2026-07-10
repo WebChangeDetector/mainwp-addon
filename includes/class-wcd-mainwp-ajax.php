@@ -349,8 +349,10 @@ class WCD_MainWP_Ajax {
 	 *
 	 * Per-field contract (see the API's GroupRequest "sometimes" rules):
 	 * - A field is only written when present in the request, so we omit a key to leave it unchanged.
-	 * - basic_auth_password: send a value to SET, send '' to CLEAR (the modal's "Remove password"
-	 *   flag), OMIT the key to leave unchanged. There is no password_action field on the API.
+	 * - basic_auth_password: present => write it (a non-empty value SETs, an empty string CLEARs);
+	 *   absent => leave the stored password unchanged. The JS owns the dots-sentinel UX and only
+	 *   sends this key when the user wants a change, so this endpoint stays contract-simple. There
+	 *   is no password_action field on the API.
 	 * - proxy_type: 'static' when on, 'none' when off (never '').
 	 * - screenshot_delay: integer clamped 7-60, or omitted when the field is left empty.
 	 *
@@ -406,13 +408,11 @@ class WCD_MainWP_Ajax {
 			$fields['js'] = (string) wp_unslash( $_POST['js'] );
 		}
 
-		// Basic Auth password: SET (value), CLEAR ('' via the remove flag) or leave unchanged (omit).
-		$clear_password = ! empty( $_POST['basic_auth_password_clear'] ) && 'false' !== $_POST['basic_auth_password_clear'];
-		$password       = isset( $_POST['basic_auth_password'] ) ? sanitize_text_field( wp_unslash( $_POST['basic_auth_password'] ) ) : '';
-		if ( $clear_password ) {
-			$fields['basic_auth_password'] = '';
-		} elseif ( '' !== $password ) {
-			$fields['basic_auth_password'] = $password;
+		// Basic Auth password: the JS owns the dots-sentinel UX and sends the key ONLY when it wants
+		// a change, so the API contract stays simple: present => write it (an empty string clears it),
+		// absent => leave the stored password unchanged.
+		if ( isset( $_POST['basic_auth_password'] ) ) {
+			$fields['basic_auth_password'] = sanitize_text_field( wp_unslash( $_POST['basic_auth_password'] ) );
 		}
 
 		$token = self::token();
@@ -439,11 +439,11 @@ class WCD_MainWP_Ajax {
 		wp_send_json_success(
 			array(
 				'screenshot_region' => $region,
-				// Additive: reflects only what this save changed about the stored password. Cleared =>
-				// false; a new password was sent => true. When neither (left unchanged) the prior state
-				// is unknown without re-reading, so the key is omitted and the next modal open re-reads
-				// the authoritative has_basic_auth from the API.
-				'has_basic_auth'    => $clear_password ? false : ( isset( $fields['basic_auth_password'] ) ? true : null ),
+				// Additive: reflects only what this save changed about the stored password. A password
+				// key was sent => set (non-empty) or cleared (empty); when the key was absent (left
+				// unchanged) the prior state is unknown without re-reading, so this is null and the
+				// next modal open re-reads the authoritative has_basic_auth from the API.
+				'has_basic_auth'    => array_key_exists( 'basic_auth_password', $fields ) ? ( '' !== $fields['basic_auth_password'] ) : null,
 			)
 		);
 	}

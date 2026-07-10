@@ -520,6 +520,12 @@
     // (its own close icon + Cancel button), so it does NOT go through the run-only modal infra. The
     // JS fills the fields from get_site_settings on open and writes them via save_site_settings.
 
+    // Placeholder shown in the password field when a password is already stored (the API never
+    // returns the real one). Mirrors the webapp's dots convention: leave the dots to keep the stored
+    // password, clear the field to remove it, type a new value to replace it. The sentinel logic
+    // lives ONLY here (in JS); the save endpoint stays contract-simple (set / clear / omit).
+    var PWD_SENTINEL = '••••••••';
+
     function settingsModal() { return document.getElementById('wcd-site-settings-modal'); }
 
     function showSettingsModal(modal) {
@@ -549,8 +555,9 @@
         if (wrap) { wrap.classList.toggle('checked', !!checked); }
     }
 
-    // Fill the modal fields from the server payload. has_basic_auth drives the "password is set"
-    // hint + the "Remove password" affordance (the password itself is never returned).
+    // Fill the modal fields from the server payload. has_basic_auth drives the "password is stored"
+    // hint + the sentinel dots in the password field (the password itself is never returned). The
+    // prior "was set" state is recorded on the modal for the save decision.
     function fillSettings(modal, data) {
         var region = settingsField(modal, 'screenshot_region');
         if (region) { region.value = data.screenshot_region || 'auto'; }
@@ -560,9 +567,10 @@
         if (threshold) { threshold.value = (data.threshold !== undefined && data.threshold !== null) ? data.threshold : ''; }
         var authUser = settingsField(modal, 'basic_auth_user');
         if (authUser) { authUser.value = data.basic_auth_user || ''; }
+        // A stored password shows the sentinel dots (leave to keep, clear to remove, type to replace).
         var authPass = settingsField(modal, 'basic_auth_password');
-        if (authPass) { authPass.value = ''; }
-        setCheckbox(settingsField(modal, 'basic_auth_password_clear'), false);
+        if (authPass) { authPass.value = data.has_basic_auth ? PWD_SENTINEL : ''; }
+        modal.setAttribute('data-password-set', data.has_basic_auth ? '1' : '0');
         setPasswordSetState(modal, !!data.has_basic_auth);
         setCheckbox(settingsField(modal, 'proxy_on'), data.proxy_on);
         var delay = settingsField(modal, 'screenshot_delay');
@@ -575,9 +583,7 @@
 
     function setPasswordSetState(modal, isSet) {
         var hint = modal.querySelector('[data-role="passwordset"]');
-        var remove = modal.querySelector('[data-role="passwordremove"]');
         if (hint) { hint.hidden = !isSet; }
-        if (remove) { remove.hidden = !isSet; }
     }
 
     function onSiteSettings(button) {
@@ -634,7 +640,6 @@
         var threshold = settingsField(modal, 'threshold');
         var authUser = settingsField(modal, 'basic_auth_user');
         var authPass = settingsField(modal, 'basic_auth_password');
-        var clear = settingsField(modal, 'basic_auth_password_clear');
         var delay = settingsField(modal, 'screenshot_delay');
         var css = settingsField(modal, 'css');
         var js = settingsField(modal, 'js');
@@ -651,12 +656,17 @@
             css: css ? css.value : '',
             js: js ? js.value : ''
         };
-        // Password: send the value only when the user typed one; send the clear flag when "Remove
-        // password" is ticked. Otherwise omit both so the stored password is left unchanged.
-        if (clear && clear.checked) {
-            payload.basic_auth_password_clear = 1;
-        } else if (authPass && authPass.value !== '') {
-            payload.basic_auth_password = authPass.value;
+        // Password (dots convention; sentinel logic lives only here, the API stays set/clear/omit):
+        //   was set + field still the sentinel  -> unchanged -> omit the key
+        //   was set + field emptied             -> clear     -> send ''
+        //   field holds a new value             -> set       -> send that value
+        //   was not set + field empty           -> nothing   -> omit
+        var wasSet = modal.getAttribute('data-password-set') === '1';
+        var passValue = authPass ? authPass.value : '';
+        if (wasSet) {
+            if (passValue !== PWD_SENTINEL) { payload.basic_auth_password = passValue; }
+        } else if (passValue !== '') {
+            payload.basic_auth_password = passValue;
         }
 
         button.disabled = true;
@@ -1682,12 +1692,15 @@
         if (!e.target.classList) { return; }
         if (e.target.classList.contains('wcd-site-toggle')) {
             onToggleSite(e.target);
-        } else if (e.target.name === 'basic_auth_password_clear') {
-            // Ticking "Remove password" clears + disables the password input (the saved password
-            // will be removed); unticking re-enables it.
-            var modal = settingsModal();
-            var pass = modal ? settingsField(modal, 'basic_auth_password') : null;
-            if (pass) { if (e.target.checked) { pass.value = ''; } pass.disabled = e.target.checked; }
+        }
+    });
+
+    // Focusing the password field while it still shows the sentinel dots selects them, so the first
+    // keystroke replaces the placeholder (rather than appending to it) while an untouched field still
+    // counts as "unchanged". Delegated so it works for the one reused settings modal.
+    document.addEventListener('focusin', function (e) {
+        if (e.target && e.target.name === 'basic_auth_password' && e.target.value === PWD_SENTINEL) {
+            e.target.select();
         }
     });
 

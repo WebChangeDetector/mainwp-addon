@@ -365,5 +365,4 @@
 .wcd-settings-form .field > small { display: block; margin-top: 4px; }
 .wcd-settings-form .ui.checkbox { margin-right: 16px; }
 .wcd-settings-advanced { margin-top: 8px; border-top: 1px solid var(--wcd-border); padding-top: 8px; }
-.wcd-settings-form .wcd-auth-pass-remove { margin-top: 8px; }
 .wcd-settings-form textarea { font-family: monospace; font-size: 12.5px; }
