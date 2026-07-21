@@ -49,6 +49,11 @@ class WCD_MainWP_Ajax {
 			'mark_comparison',
 			'runs_render',
 			'runs_comparisons',
+			'flow_list',
+			'flow_steps',
+			'flow_runs',
+			'flow_run_view',
+			'flow_toggle',
 			'run_start',
 			'run_status',
 			'run_heartbeat',
@@ -962,6 +967,13 @@ class WCD_MainWP_Ajax {
 			}
 		}
 
+		// The polled pre batches join the by_batch breakdown too (raw buckets; they never join the
+		// aggregate). The per-site pipeline card keeps showing each site's final pre counts and
+		// computes the per-site pre-fail shift from them. Additive: by_batch only gains entries.
+		foreach ( $pre_batches as $batch ) {
+			$per_batch[ $batch ] = self::batch_bucket( $counts_by_batch[ $batch ] ?? array() );
+		}
+
 		// Checks whose PRE screenshot failed have no pair, so the API never creates their comparison:
 		// count them as failed instead of leaving them in processing forever (mirrors the webapp).
 		// Accepted edge (same tradeoff as the webapp): the API pairs against the latest DONE pre
@@ -1142,6 +1154,208 @@ class WCD_MainWP_Ajax {
 		wp_send_json_success( array( 'html' => WCD_MainWP_Runs_View::render_comparisons_table( $comparisons, false ) ) );
 	}
 
+	/* ───────────────────────── Interaction Flows ───────────────────────── */
+
+	// Read-only + On-Demand-toggle surface on the per-site tab. All actions are additive and
+	// account-scoped by the API token; the flow list is scoped to the site's mapped website UUID.
+	// A flow/run 404 means the flow was deleted in the WebChange Detector account meanwhile; it is
+	// NOT a stale site mapping, so these handlers never call reject_if_group_gone()/reset_site().
+
+	/**
+	 * Resolve the requested site's mapped WCD website UUID, rejecting with a clean setup hint when
+	 * the site is not enabled or not linked (never a fatal).
+	 *
+	 * @return string The website UUID (the method exits on failure).
+	 */
+	protected static function flow_website_uuid(): string {
+		$site_id = self::site_id();
+		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'This site is not enabled for visual checks yet. Enable it in the WebChange Detector settings.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$website_uuid = WCD_MainWP_Site_Map::get_website_uuid( $site_id );
+		if ( '' === $website_uuid ) {
+			wp_send_json_error( array( 'message' => __( 'This site is not linked to a WebChange Detector website yet. Disable and re-enable it in the WebChange Detector settings to re-link.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		return $website_uuid;
+	}
+
+	/**
+	 * Send the shared "deleted meanwhile" error for a flow/run 404. Deliberately does not touch the
+	 * site mapping: the mapping self-heal (reset_site) is for group 404s only.
+	 *
+	 * @param array $response Normalized API result.
+	 * @return void
+	 */
+	protected static function reject_if_flow_gone( array $response ): void {
+		if ( 404 === (int) ( $response['status'] ?? 0 ) ) {
+			wp_send_json_error( array( 'message' => __( 'This flow no longer exists. Refresh the list.', 'webchangedetector-for-mainwp' ) ) );
+		}
+	}
+
+	/**
+	 * List the flows of the site's mapped website as a rendered fragment.
+	 *
+	 * @return void
+	 */
+	public static function flow_list(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$website_uuid = self::flow_website_uuid();
+
+		$response = WCD_MainWP_API::list_flows( $website_uuid, 100, 1, self::token() );
+		if ( ! $response['ok'] ) {
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$data       = is_array( $response['data'] ) ? $response['data'] : array();
+		$flows      = ( isset( $data['data'] ) && is_array( $data['data'] ) ) ? $data['data'] : array();
+		$can_toggle = WCD_MainWP_Interaction_Flows::can_toggle();
+
+		wp_send_json_success(
+			array(
+				'html'       => WCD_MainWP_Interaction_Flows::render_flows_list( $flows, $can_toggle ),
+				'can_toggle' => $can_toggle,
+			)
+		);
+	}
+
+	/**
+	 * Render a flow's read-only step list. The detail payload carries the flow's website_id, so the
+	 * site scoping is verified from the payload (no extra API call).
+	 *
+	 * @return void
+	 */
+	public static function flow_steps(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		$website_uuid = self::flow_website_uuid();
+		$flow_id      = isset( $_POST['flow_id'] ) ? sanitize_text_field( wp_unslash( $_POST['flow_id'] ) ) : '';
+		if ( '' === $flow_id ) {
+			wp_send_json_error( array( 'message' => __( 'Missing flow id.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$response = WCD_MainWP_API::get_flow( $flow_id, self::token() );
+		if ( ! $response['ok'] ) {
+			self::reject_if_flow_gone( $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$flow = self::unwrap( $response['data'] );
+		$flow = is_array( $flow ) ? $flow : array();
+		if ( ( $flow['website_id'] ?? '' ) !== $website_uuid ) {
+			wp_send_json_error( array( 'message' => __( 'This flow does not belong to this site.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		wp_send_json_success( array( 'html' => WCD_MainWP_Interaction_Flows::render_steps( $flow ) ) );
+	}
+
+	/**
+	 * Render a flow's runs list (paginated).
+	 *
+	 * @return void
+	 */
+	public static function flow_runs(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		self::flow_website_uuid();
+		$flow_id = isset( $_POST['flow_id'] ) ? sanitize_text_field( wp_unslash( $_POST['flow_id'] ) ) : '';
+		$page    = isset( $_POST['page'] ) ? max( 1, (int) $_POST['page'] ) : 1;
+		if ( '' === $flow_id ) {
+			wp_send_json_error( array( 'message' => __( 'Missing flow id.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$response = WCD_MainWP_API::list_flow_runs( $flow_id, 10, $page, self::token() );
+		if ( ! $response['ok'] ) {
+			self::reject_if_flow_gone( $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$data = is_array( $response['data'] ) ? $response['data'] : array();
+		$runs = ( isset( $data['data'] ) && is_array( $data['data'] ) ) ? $data['data'] : array();
+		$meta = ( isset( $data['meta'] ) && is_array( $data['meta'] ) ) ? $data['meta'] : array();
+
+		wp_send_json_success( array( 'html' => WCD_MainWP_Interaction_Flows::render_runs( $runs, $meta ) ) );
+	}
+
+	/**
+	 * Render one flow run's per-step results. Also the polling endpoint: the JS re-calls this every
+	 * 10 seconds while the detail view is open and the run is still processing, so the response
+	 * carries the run status alongside the fragment.
+	 *
+	 * @return void
+	 */
+	public static function flow_run_view(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		self::flow_website_uuid();
+		$flow_id = isset( $_POST['flow_id'] ) ? sanitize_text_field( wp_unslash( $_POST['flow_id'] ) ) : '';
+		$run_id  = isset( $_POST['run_id'] ) ? sanitize_text_field( wp_unslash( $_POST['run_id'] ) ) : '';
+		if ( '' === $run_id ) {
+			wp_send_json_error( array( 'message' => __( 'Missing run id.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$response = WCD_MainWP_API::get_flow_run( $run_id, self::token() );
+		if ( ! $response['ok'] ) {
+			self::reject_if_flow_gone( $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$run = self::unwrap( $response['data'] );
+		$run = is_array( $run ) ? $run : array();
+		// Cheap scoping from the payload: the detail shape carries the flow UUID.
+		if ( '' !== $flow_id && ! empty( $run['flow'] ) && $run['flow'] !== $flow_id ) {
+			wp_send_json_error( array( 'message' => __( 'This run does not belong to this flow.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		wp_send_json_success(
+			array(
+				'html'   => WCD_MainWP_Interaction_Flows::render_run_detail( $run ),
+				'status' => (string) ( $run['status'] ?? '' ),
+			)
+		);
+	}
+
+	/**
+	 * Flip a flow's On-Demand flag (enabled_manual), the only flow field the add-on may write
+	 * (WCD_MainWP_API::FLOW_TOGGLE_FIELDS). The plan gate is detected status-based: a 403 means
+	 * the plan lacks Interaction Flows; the cached account is then stale (e.g. after a downgrade),
+	 * so it is invalidated and the response carries the upgrade flag for the upsell message.
+	 *
+	 * @return void
+	 */
+	public static function flow_toggle(): void {
+		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
+		self::flow_website_uuid();
+		$flow_id = isset( $_POST['flow_id'] ) ? sanitize_text_field( wp_unslash( $_POST['flow_id'] ) ) : '';
+		$enabled = ! empty( $_POST['enabled'] ) && 'false' !== $_POST['enabled'];
+		if ( '' === $flow_id ) {
+			wp_send_json_error( array( 'message' => __( 'Missing flow id.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		$response = WCD_MainWP_API::update_flow_toggles( $flow_id, array( 'enabled_manual' => $enabled ), self::token() );
+		if ( ! $response['ok'] ) {
+			if ( 403 === (int) $response['status'] ) {
+				WCD_MainWP_Options::delete_transient( WCD_MainWP_Site_Settings::ACCOUNT_CACHE );
+				wp_send_json_error(
+					array(
+						'message' => __( 'Interaction Flows are not included in your current plan.', 'webchangedetector-for-mainwp' ),
+						'upgrade' => true,
+					)
+				);
+			}
+			self::reject_if_flow_gone( $response );
+			wp_send_json_error( array( 'message' => $response['error'] ) );
+		}
+
+		$flow = self::unwrap( $response['data'] );
+		$flow = is_array( $flow ) ? $flow : array();
+
+		wp_send_json_success(
+			array(
+				'enabled_manual'     => ! empty( $flow['enabled_manual'] ),
+				'enabled_monitoring' => ! empty( $flow['enabled_monitoring'] ),
+			)
+		);
+	}
+
 	/* ───────────────────────── Run state (resume) ──────────────────────── */
 
 	/**
@@ -1207,15 +1421,19 @@ class WCD_MainWP_Ajax {
 			wp_send_json_success( array( 'active' => false ) );
 		}
 
+		$activity = WCD_MainWP_Update_Flow::activity();
+
 		wp_send_json_success(
 			array(
 				'active'        => true,
 				// Only the page may take over once the heartbeat has gone silent; a fresh heartbeat
 				// means another tab is still driving the run. The driver id lets a same-tab reload
-				// recognise its own run and reclaim it instantly (see checkResume).
+				// recognise its own run and reclaim it instantly (see checkResume). idle + driver
+				// come from the activity option (heartbeats write only that); the structural state
+				// is the fallback for a run started before the activity split.
 				'resumable'     => $idle >= WCD_MainWP_Update_Flow::RESUME_AFTER,
 				'idle'          => $idle,
-				'driver'        => (string) ( $state['driver'] ?? '' ),
+				'driver'        => (string) ( $activity['driver'] ?? ( $state['driver'] ?? '' ) ),
 				'phase'         => (string) ( $state['phase'] ?? 'pre' ),
 				'sites'         => array_values( $state['sites'] ),
 				'pre_batches'   => $pre,
@@ -1240,9 +1458,13 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
-	 * Resume an abandoned run: dispatch the post screenshots for every updated site that is still
-	 * missing one, hand back all post batches (existing + new) for the card to poll, and stop
-	 * tracking the run (everything left finishes server-side).
+	 * Resume an interrupted run's post screenshots: dispatch them for every updated site that is
+	 * still missing one and hand back the post batches (existing + new) for the card to poll.
+	 *
+	 * Accepts an optional site_ids[] subset (default: all updated sites, the legacy behavior), so
+	 * the per-site pipeline can resume just the sites whose updates ran while other sites are still
+	 * mid-pipeline. Every newly dispatched batch is recorded via record_post_batch, whose self-clear
+	 * ends the tracked run once every run site has a post batch (the true end of the run).
 	 *
 	 * @return void
 	 */
@@ -1255,9 +1477,24 @@ class WCD_MainWP_Ajax {
 			wp_send_json_error( array( 'message' => __( 'No interrupted run to resume.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
+		// Optional subset (additive param; the nonce was verified above). Only sites that are
+		// actually recorded as updated qualify, so a crafted id can never trigger post screenshots
+		// for a site whose updates did not run.
+		$subset = isset( $_POST['site_ids'] ) && is_array( $_POST['site_ids'] );
+		if ( $subset ) {
+			$requested = array_filter( array_map( 'intval', wp_unslash( $_POST['site_ids'] ) ) );
+			if ( ! empty( $requested ) ) {
+				$updated = array_values( array_intersect( $updated, $requested ) );
+			}
+			if ( empty( $updated ) ) {
+				wp_send_json_error( array( 'message' => __( 'No interrupted run to resume.', 'webchangedetector-for-mainwp' ) ) );
+			}
+		}
+
 		$existing    = isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? $state['post_batches'] : array();
 		$pre_state   = isset( $state['pre_batches'] ) && is_array( $state['pre_batches'] ) ? $state['pre_batches'] : array();
 		$batches     = array();
+		$dispatched  = array();
 		$pre_batches = array();
 		$sites       = array();
 		$need        = array();
@@ -1287,7 +1524,8 @@ class WCD_MainWP_Ajax {
 			// One chunked batch-per-group call for all missing sites instead of one take call each.
 			$result = self::take_batches_for_sites( $need, 'post' );
 			foreach ( $result['batches'] as $site_id => $batch ) {
-				$batches[ $site_id ] = (string) $batch;
+				$batches[ $site_id ]    = (string) $batch;
+				$dispatched[ $site_id ] = (string) $batch;
 			}
 			$skipped = count( $result['failed'] );
 			$error   = $result['error'];
@@ -1309,23 +1547,23 @@ class WCD_MainWP_Ajax {
 
 		if ( empty( $batches ) ) {
 			if ( '' === $error ) {
-				// Every site was unresumable (no group mapping): drop the state for good.
-				WCD_MainWP_Update_Flow::clear_run();
+				// Every requested site was unresumable (no group mapping). Only the legacy
+				// full-run call may drop the whole state: with a subset, OTHER sites can still be
+				// mid-pipeline and their recorded batches must survive for the next resume.
+				if ( ! $subset ) {
+					WCD_MainWP_Update_Flow::clear_run();
+				}
 				wp_send_json_error( array( 'message' => __( 'Nothing to resume: the sites are no longer enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
 			}
 			// A retryable failure (e.g. credits): keep the tracked run so the user can retry.
 			wp_send_json_error( array( 'message' => $error ) );
 		}
 
-		if ( 0 === $skipped ) {
-			WCD_MainWP_Update_Flow::clear_run();
-		} else {
-			// Partial success: persist the dispatched batches so a later retry resumes only what
-			// is still missing (the staleness gate delays the next offer; acceptable for this
-			// rare path). The warning tells the user what failed.
-			foreach ( $batches as $sid => $batch_id ) {
-				WCD_MainWP_Update_Flow::record_post_batch( (int) $sid, (string) $batch_id );
-			}
+		// Always record the newly dispatched batches (the pre-existing ones already live in the
+		// state). The run must survive while other sites are still mid-pipeline; record_post_batch
+		// self-clears the state once EVERY run site has a post batch, which is the true end.
+		foreach ( $dispatched as $sid => $batch_id ) {
+			WCD_MainWP_Update_Flow::record_post_batch( (int) $sid, (string) $batch_id );
 		}
 
 		wp_send_json_success(

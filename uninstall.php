@@ -14,6 +14,7 @@ $wcd_mainwp_keys = array(
 	'wcd_site_map',
 	'wcd_auto_enable_sites',
 	'wcd_mainwp_active_run',
+	'wcd_mainwp_run_activity',
 );
 
 foreach ( $wcd_mainwp_keys as $wcd_mainwp_key ) {

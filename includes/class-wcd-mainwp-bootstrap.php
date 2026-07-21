@@ -23,6 +23,10 @@ class WCD_MainWP_Bootstrap {
 		'mainwp_tab', // Dashboard overview (widget).
 	);
 
+	// Public pricing page used by every upsell surface (credit shortage, flow plan gate). One
+	// constant so the URL is maintained in a single place.
+	const UPGRADE_URL = 'https://www.webchangedetector.com/pricing/';
+
 	/**
 	 * Load the add-on's classes and defer the rest of the setup to plugins_loaded.
 	 *
@@ -39,6 +43,7 @@ class WCD_MainWP_Bootstrap {
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-ajax.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-widget.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-runs-view.php';
+		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-interaction-flows.php';
 
 		add_action( 'plugins_loaded', array( self::class, 'setup' ) );
 	}
@@ -329,7 +334,7 @@ class WCD_MainWP_Bootstrap {
 				'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
 				'nonce'           => wp_create_nonce( WCD_MainWP_Ajax::NONCE ),
 				'visualChecksUrl' => self::tab_url( 'checks' ),
-				'upgradeUrl'      => 'https://www.webchangedetector.com/pricing/',
+				'upgradeUrl'      => self::UPGRADE_URL,
 				'strings'         => self::js_strings(),
 			)
 		);
@@ -421,6 +426,9 @@ class WCD_MainWP_Bootstrap {
 			'statusUpdating'    => __( 'Updating', 'webchangedetector-for-mainwp' ),
 			'statusPost'        => __( 'Capturing post', 'webchangedetector-for-mainwp' ),
 			'statusComparing'   => __( 'Comparing', 'webchangedetector-for-mainwp' ),
+			'statusWaiting'     => __( 'Waiting for update', 'webchangedetector-for-mainwp' ),
+			'statusDone'        => __( 'Done', 'webchangedetector-for-mainwp' ),
+			'statusFailed'      => __( 'Failed', 'webchangedetector-for-mainwp' ),
 			'clean'             => __( 'Clean', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review. */
 			'toReview'          => __( '%d to review', 'webchangedetector-for-mainwp' ),
@@ -464,6 +472,8 @@ class WCD_MainWP_Bootstrap {
 			'metaErrorSingle'   => __( 'The checks for %d site could not be loaded. It would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of sites. */
 			'metaErrorPlural'   => __( 'The checks for %d sites could not be loaded. They would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
+			// Interaction Flows section on the per-site tab.
+			'flowEnableConfirm' => __( 'Enable this flow for On-Demand Checks? Its checkpoints then run as checks with every On-Demand Check and safe update of this site, and count against your plan. Continue?', 'webchangedetector-for-mainwp' ),
 		);
 	}
 }

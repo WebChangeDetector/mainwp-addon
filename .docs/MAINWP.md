@@ -57,13 +57,14 @@ webchangedetector-for-mainwp/
 │   ├── class-wcd-mainwp-url-sync.php       # Fetch child URLs (posts hook + pages guarded) -> two-step sync
 │   ├── class-wcd-mainwp-cache-purge.php    # Child-site cache purge via mainwp_fetchurlauthed + cache_purge_action
 │   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + after-update hook safety-net + pending-update counts
-│   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview)
+│   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview + flows)
 │   ├── class-wcd-mainwp-runs-view.php      # Renders the Run + Checks tab bodies, the extension-page tab switcher (render_tabs), filters + batch/list rendering
+│   ├── class-wcd-mainwp-interaction-flows.php # Interaction Flows fragments for the per-site tab (list, steps, runs, run detail)
 │   └── class-wcd-mainwp-widget.php         # The Safe Update dashboard widget (entry point) + its Visual Checks "Run" tab panel
 ├── templates/
 │   ├── admin-page.php             # Extension page shell: resolves ?tab=, renders the tab switcher + the active tab body
 │   ├── settings-page.php          # Account tab body: token + auto-enable toggle + account/credits card
-│   ├── site-tab.php               # Per-site tab: status + safe-update entry (disabled when no updates)
+│   ├── site-tab.php               # Per-site tab: status + safe-update entry (disabled when no updates) + the Interaction Flows section
 │   ├── widget-safe-update.php     # Safe-update dashboard widget body (native MainWP chrome) -> safe-update flow
 │   ├── entry-banner.php           # Hero banner (native Updates page only) -> safe-update flow
 │   ├── runs-view.php              # Checks tab body (Fomantic filter bar; chrome + tabs from the page shell)
@@ -101,9 +102,12 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
   websites by exact domain match). `screenshot_region` is the user's per-site choice (`us`, `eu` or
   `auto`; default `auto`), stored so it survives re-provisioning; the value sent on group create and
   via the `save_site_settings` AJAX action (the per-site On-Demand settings modal).
-- Active-run state: **`wcd_mainwp_active_run`** = the tracked safe-update run (sites, phase,
-  pre/post batches, updated sites, last_activity) used for the resume flow; cleared when the run's
-  post phase is fully dispatched.
+- Active-run state: **`wcd_mainwp_active_run`** = the tracked safe-update run's STRUCTURAL state
+  (sites, per-site pre/post batches, updated sites; the `phase` field is legacy/informational),
+  used for the resume flow; cleared once every run site has a post batch recorded. Only the
+  JS-serialized mutating endpoints write it (single writer). **`wcd_mainwp_run_activity`** =
+  the liveness signal ({ last_activity, driver }), written ONLY by the heartbeat and the poll's
+  throttled touch, so activity bumps can never clobber a structural record.
 - Auto-enable option: **`wcd_auto_enable_sites`** (`'1'`/`'0'`, default ON). When on, the
   `mainwp_added_new_site` hook auto-provisions + enables each newly added child site (and syncs its
   URLs). Each enabled site provisions WCD resources that count against the plan, hence the opt-out.
@@ -128,12 +132,14 @@ on-demand settings prefill; the password is never returned, `has_basic_auth` sig
 `PUT /groups/{id}/urls/select-all` call, a single SQL UPDATE server-side — used by the "select all"
 toggles so large sites stay fast), `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
 (supports `batch_per_group`: one batch per group + a group->batch map in the response), `get_queues`,
-`get_comparisons`, `get_batch`, `list_batches`, `update_comparison`.
+`get_comparisons`, `get_batch`, `list_batches`, `update_comparison`, and the Interaction Flows set:
+`list_flows` (scoped by `website_id`), `get_flow`, `update_flow_toggles` (allow-list
+`FLOW_TOGGLE_FIELDS`), `list_flow_runs`, `get_flow_run` (the run-detail poll endpoint).
 
 Vocabulary: data-model terms (`manual`/`monitoring`, `source=manual`) in API calls; UI copy says
 "On-Demand Check". Never expose AI model names (the API strips them server-side).
 
-## Safe-Update Flow (confirm popup + unified in-card run, phased)
+## Safe-Update Flow (confirm popup + unified in-card run, per-site pipeline)
 
 Entry: the **"Safe Update" dashboard widget** (`mainwp_getmetaboxes`, callback
 `WCD_MainWP_Widget::render_safe_update_metabox`), a draggable/hideable full-width metabox on the
@@ -185,15 +191,29 @@ widget heading (`.wcd-run-reopen-slot`; on the Updates banner it falls back into
 **reopens** the popup, which is the only way back in, so a resumed run (which does NOT auto-open) is
 reached through it. When the run finishes the warning clears, the card's own dismiss appears (clears
 the run), and the reopen button shows the verdict. The
-browser is the scheduler and orchestrates the phases as **barriers** so every site advances together:
+browser is the scheduler, but every site runs its OWN pipeline
+(`pre -> update_queued -> updating -> post_dispatch -> post -> done | failed`), so sites advance
+independently and results stream in per site:
 
-1. **PRE**: ONE `take_pre` call with all check-enabled sites -> **purge each site's child cache**
-   (synchronous, best effort) -> dispatch the pre batches -> poll all batches aggregated until done.
-2. **UPDATES**: `run_update` per site (sequential) -> `execute_update_site_*` (guarded, synchronous;
-   suppresses the after-update hook so post is not double-fired) -> **purge the site's child cache**
-   when anything was updated. A per-site failure (e.g. offline) is tolerated; "nothing to update" is
-   success-no-post.
-3. **POST**: ONE `take_post` call with all sites -> poll aggregated -> `get comparisons` per batch.
+1. **PRE (bundled)**: ONE `take_pre` call with all check-enabled sites -> **purge each site's
+   child cache** (synchronous, best effort) -> dispatch the pre batches. From here each site is
+   on its own: as soon as ITS pre batch completes, the site enters the update FIFO.
+2. **UPDATES (single-file FIFO)**: max ONE `run_update` in flight at any time, ordered by pre
+   completion (the synchronous multi-minute call binds a dashboard PHP worker per site, and
+   MainWP's update abilities are not documented for parallel calls). `run_update` ->
+   `execute_update_site_*` (guarded, synchronous; suppresses the after-update hook so post is not
+   double-fired) -> **purge the site's child cache** when anything was updated. A per-site failure
+   (e.g. offline) is tolerated; "nothing to update" is success-no-post. Sites without selected
+   checks skip the screenshot phases and only pass through this FIFO.
+3. **POST (per site)**: right after a site's update returns, ITS `take_post {site_ids:[id]}` is
+   dispatched and its post batch joins the poll set; the comparisons are created server-side as
+   the post screenshots finish. When the site's post batch completes, its comparisons are fetched
+   (`results {batch}`) and its row settles (clean / N to review), while other sites may still be
+   in PRE or UPDATES.
+
+All mutating AJAX (`take_pre` / `run_update` / `take_post` / `run_resume_post`) is funneled
+through ONE shared promise lane in the JS (mutation lane), so the structural run option only ever
+has a single writer; read-only calls (`poll`, `results`, heartbeat) run freely beside it.
 
 **Cache purging** (`WCD_MainWP_Cache_Purge`): both purges go through the documented
 `mainwp_fetchurlauthed` filter with the `cache_purge_action` child callable (ships with MainWP Child
@@ -214,53 +234,75 @@ take everything twice); a group missing from the map was skipped by the API (no 
 selected) and fails the request AFTER the successful batches were recorded in the run state, so the
 run stays resumable.
 
-The unified card shows a **PRE -> UPDATES -> POST -> DONE** timeline (a fill track + 4 nodes), three
-side-by-side panels (**Pre-update screenshots** and **Post-update screenshots** each with an aggregate
-**Queue / Processing / Done / Failed** grid, and **Installing updates** in the middle: processing only,
-core · plugins · themes) plus a **per-site list** (site · `done/total` · status pill, no
-per-site bars). When the run finishes the footer flips to **"All good" / "N pages to review"** with a
-**Re-check** button (re-runs POST + compare only) and a **View results** link to the embedded Change
-Detections page. The detailed comparison table is no longer rendered in the card; it lives on the
-Change Detections page.
+The unified card shows a **PRE -> UPDATES -> POST -> DONE** timeline (a fill track + 4 nodes; a
+node is done only when EVERY site passed that phase, the earliest per-site phase is the active
+node, and the fill is the MEAN per-site progress), three side-by-side aggregate panels
+(**Pre-update screenshots** and **Post-update screenshots** each summing every site's
+**Queue / Processing / Done / Failed** bucket, and **Installing updates** in the middle counting
+the pending update items of the queued + updating sites) plus the **per-site rows**: each row has
+a `done/total` counter, a **phase pill** (Capturing pre / Waiting for update / Updating /
+Capturing post / Comparing / Done / Failed, then the verdict Clean / "N to review") and its OWN
+**Queue / Processing / Done / Failed mini-grid** (webapp-style), fed from the poll's `by_batch`
+breakdown; the site's phase decides whether the pre or the post bucket is shown. When the run
+finishes the footer flips to **"All good" / "N pages to review"** with a **Re-check** button
+(re-runs POST + compare only, through the same pipeline) and a **View results** link to the
+embedded Change Detections page. The detailed comparison table is no longer rendered in the card;
+it lives on the Change Detections page.
 
-`poll()` accepts **multiple batches** (`batches[]`, single `batch` still supported): it fetches the
-queues endpoint's pre-aggregated `meta.status_counts_by_batch` (one call for all batches) and sums
-the per-batch buckets into one aggregate (feeds the Pre/Post panels) plus a `by_batch` breakdown
-(feeds each site's `done/total` counter). A POST batch holds TWO queue rows per check (post
-screenshot + comparison, spawned async per finished screenshot), so raw counts would double-count
-the run; `batch_bucket()` therefore derives check-level counts from the per-batch `by_type`
-breakdown (total = post rows, done = `compare.done`, processing = remainder, mirroring the webapp's
-on-demand cards). POST-phase polls also send the run's PRE batches (`pre_batches[]`): their failed
-count is shifted from processing to failed, because a check whose pre screenshot failed never gets
-a comparison (`run_resume_post` returns them for the resume path). Dynamic widths (timeline fill,
-credit bar) use the `.wcd-w-*` step utilities, never inline styles.
+**ONE bundled poll loop** drives the whole run (never per-site polling): every ~3s tick sends ALL
+currently interesting batches in one `poll` call: the pre batches of sites still in PRE and the
+post batches of sites in POST (as `batches[]`, single `batch` still supported), plus the already
+completed pre batches as `pre_batches[]`. `poll()` fetches the queues endpoint's pre-aggregated
+`meta.status_counts_by_batch` (one API call for everything) and returns the summed aggregate plus
+a `by_batch` breakdown that also includes the `pre_batches` (raw buckets); the JS keeps the
+site->batch maps and computes per site: complete = `queue+processing === 0 && done+failed > 0`
+(same rule as the global `complete`) and the per-site pre-fail shift
+`min(preBucket.failed, postBucket.processing)` from processing to failed, because a check whose
+pre screenshot failed never gets a comparison (the server applies the same shift to the summed
+aggregate; `run_resume_post` returns the pre batches for the resume path). A POST batch holds TWO
+queue rows per check (post screenshot + comparison, spawned async per finished screenshot), so raw
+counts would double-count the run; `batch_bucket()` therefore derives check-level counts from the
+per-batch `by_type` breakdown (total = post rows, done = `compare.done`, processing = remainder,
+mirroring the webapp's on-demand cards). The stall counter only advances while nothing progresses
+(no finished-count change, no per-site transition). Dynamic widths (timeline fill, credit bar) use
+the `.wcd-w-*` step utilities, never inline styles.
 
 **After-update hook safety-net** (`mainwp_after_*`): for updates started outside our card
 (cron/native). Deduped per site via a short transient; suppressed while the card flow owns the run.
 Post-only (no reliable pre in a synchronous before-hook). Purges the site's child cache (behind the
 same dedupe) right before enqueuing the post screenshots.
 
-**Run-state persistence + auto-resume (any phase)**: because the browser orchestrates the run, every
-phase transition is persisted server-side in the `wcd_mainwp_active_run` option
-(`WCD_MainWP_Update_Flow` run-state section): `run_start` (sites + per-site name/checks),
-`take_pre`/`take_post` record their batches, `run_update` records completed sites, `poll` bumps the
-activity timestamp. In addition the driving tab sends a short, **unthrottled heartbeat**
-(`run_heartbeat`, ~7s, carrying a per-tab **driver id** kept in `sessionStorage`) so even a
-multi-minute synchronous update never makes the run look abandoned, and the run records which tab
-drives it. On any page that hosts the entry point, `checkResume` calls `run_status` on load and takes
-over **instantly** when the run's `driver` matches this tab's id (a same-tab reload or navigation
-reclaiming its OWN run; no other tab can be driving it) or when the heartbeat has been silent for
-`RESUME_AFTER` (20s). The run is then **resumed in the background** (it continues at its persisted
-`phase` but the popup does NOT auto-open; the user opens it via the "Updates running" button: PRE
-re-takes only the still-missing pre screenshots then polls; UPDATES finishes the not-yet-updated sites;
-POST uses `run_resume_post`, which re-purges and dispatches the missing post batches). If neither holds
-(a foreign, still-fresh driver, so another tab is likely driving it), the page shows the "Updates
-running" button + locks the CTA **immediately** so the user cannot start a second run, and re-checks
-after a short window (`RESUME_RECHECK`) until it may take over; clicking the button takes over there and
-then. Once every run site has a post batch the state clears (the rest finishes server-side); a
-long-idle run that never took a pre screenshot and never installed anything is dropped as leftover
-(`RUN_STALE_AFTER`). So navigating away from the Operations page (or a closed tab) no longer loses the
-run.
+**Run-state persistence + auto-resume (per site)**: because the browser orchestrates the run, every
+per-site transition is persisted server-side (`WCD_MainWP_Update_Flow` run-state section) across
+TWO options with strictly separate writers. The **structural** option `wcd_mainwp_active_run` is
+only written by the mutating endpoints, which the JS serializes through the mutation lane:
+`run_start` (sites + per-site name/checks), `take_pre`/`take_post` record their batches per site,
+`run_update` records the updated site, `run_resume_post` records the batches it dispatches. The
+**activity** option `wcd_mainwp_run_activity` ({ last_activity, driver }) is only written by
+`run_heartbeat` (unthrottled, ~7s, carrying a per-tab **driver id** kept in `sessionStorage`) and
+by `poll`/`run_update`'s throttled touch, so even a multi-minute synchronous update never makes
+the run look abandoned AND an activity bump can never clobber a concurrent structural record.
+`idle_seconds()` prefers the activity option and falls back to the structural `last_activity`
+(written once at `run_start`) for a legacy in-flight run. On any page that hosts the entry point,
+`checkResume` calls `run_status` on load and takes over **instantly** when the run's `driver`
+matches this tab's id (a same-tab reload or navigation reclaiming its OWN run; no other tab can be
+driving it) or when the heartbeat has been silent for `RESUME_AFTER` (20s). The run is then
+**resumed in the background** (the popup does NOT auto-open; the user opens it via the "Updates
+running" button) with the SAME per-site state machine, each site's seed derived from ITS persisted
+fields (the legacy global `phase` is ignored): a recorded post batch -> poll it; in
+`updated_sites` -> ONE bundled `run_resume_post {site_ids}` re-purges and dispatches the missing
+post batches; a recorded pre batch -> poll it (NEVER re-take, credit safety); nothing recorded ->
+ONE bundled `take_pre`. If neither takeover condition holds (a foreign, still-fresh driver, so
+another tab is likely driving it), the page shows the "Updates running" button + locks the CTA
+**immediately** so the user cannot start a second run, and re-checks after a short window
+(`RESUME_RECHECK`) until it may take over; clicking the button takes over there and then. End of
+tracking: once every run site has a post batch the structural state self-clears via
+`record_post_batch` (the rest finishes server-side), and a run that FINISHES with a failed site
+(which by definition never gets its post batch) is discarded by `finishRun` instead (best effort;
+the user has seen the verdict, so it must not auto-resume forever). Only an ABORTED run keeps its
+state (failRun/navigation), so the resume path can retry it; a long-idle run that never took a
+pre screenshot and never installed anything is dropped as leftover (`RUN_STALE_AFTER`). So
+navigating away from the Operations page (or a closed tab) no longer loses the run.
 
 While a run is in flight the popup cannot be closed (close vetoed + keep-open warning), so it stays the
 visible scheduler. Navigating away cannot be prevented, but is recoverable (the run resumes on return,
@@ -383,6 +425,43 @@ account (the website filter narrows to a managed site's manual + auto groups). A
 Timestamps render with `wp_date()` (dashboard timezone), relative labels with native
 `data-tooltip` attributes. The CSS is layout glue only: surfaces/colors come from Fomantic + the
 MainWP theme, so light/dark both work.
+
+## Interaction Flows (read-only + On-Demand toggle)
+
+Flows (FEAT-61) are recorded with the WebChange Detector browser extension and managed in the
+WebChange Detector account; the add-on only **views and toggles** them. Surface: an "Interaction
+Flows" section on the **per-site tab** (`templates/site-tab.php`, rendered only when the site is
+enabled), lazy-loaded via the `flow_list` AJAX action. Fragments come from
+`WCD_MainWP_Interaction_Flows` (naming rule: `Interaction_Flows` is this customer-facing feature,
+`WCD_MainWP_Update_Flow` is the unrelated safe-update orchestration).
+
+- **Website binding:** the list is scoped to the site's mapped `website_uuid`
+  (`WCD_MainWP_Site_Map::get_website_uuid()`), so it shows exactly the flows that run in
+  MainWP-triggered checks. An unmapped/not-enabled site gets a clean setup hint, never a fatal.
+- **Only the On-Demand toggle** (`enabled_manual`, honored by safe-update pre/post checks) is
+  writable; `enabled_monitoring` renders as a read-only badge (the add-on hides monitoring
+  settings everywhere). The only writable flow fields live in the
+  `WCD_MainWP_API::FLOW_TOGGLE_FIELDS` allow-list; `name`/`steps` are never sent. Enabling asks
+  for a `window.confirm` (cost transparency: checkpoints run as billable checks).
+- **Plan gate:** the toggle is disabled + an upsell message shown when
+  `plan_features.interaction_flows` is missing from the cached account
+  (`WCD_MainWP_Site_Settings::get_account()`, 0 extra API calls). Writes are additionally gated
+  server-side: a **403 on the toggle is detected status-based** (never by matching the message
+  string), invalidates the account cache (stale after a downgrade) and re-renders the gated list.
+- **AJAX actions** (`flow_list`, `flow_steps`, `flow_runs`, `flow_run_view`, `flow_toggle`):
+  additive, each with the standard inline nonce + capability check; they return rendered HTML
+  fragments. A flow/run **404 is NOT a stale site mapping** (the flow was deleted in the account
+  meanwhile): these handlers never call `reject_if_group_gone()`/`reset_site()`.
+- **Run detail polling:** the per-step run detail re-fetches `flow_run_view` every **10 s**
+  (webapp parity) ONLY while the detail view is open AND the run's `status` is `processing`;
+  the loop stops on close, accordion collapse, status settle and errors, and skips ticks while
+  the browser tab is hidden. Everything else is lazy per drill-in (list = 1 GET per tab view).
+- **Public comparison links** for checkpoint results are built from the run payload's comparison
+  `token` + `WCD_MainWP_Interaction_Flows::PUBLIC_COMPARISON_URL` (the payload carries no
+  `public_link`). Sensitive step values arrive redacted (`value = null`, `value_set = true`) and
+  render as a neutral "Value stored" hint. Checkpoint comparisons also appear in the Checks tab
+  drill-in, where `comparison_row()` adds a small `flow name : checkpoint label` line (additive
+  markup from the API's `flow_checkpoint_label`/`flow_name` fields).
 
 ## Security
 

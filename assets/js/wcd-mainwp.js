@@ -1020,10 +1020,14 @@
         return el('div', { class: 'wcd-pf-site' }, [head, urlsBody]);
     }
 
-    /* ─── Unified in-card run (PRE → UPDATES → POST → DONE, phased) ──────── */
-    // One card for the whole run: a timeline, aggregate Pre/Post Queue/Processing/Done/Failed panels,
-    // a processing-only Updates panel, a per-site list, and a results footer. The browser orchestrates
-    // the phases as barriers so every site moves through PRE → UPDATES → POST together.
+    /* ─── Unified in-card run (per-site pipeline) ────────────────────────── */
+    // One card for the whole run: a timeline, aggregate Pre/Updates/Post panels, per-site rows
+    // (phase pill + Queue/Processing/Done/Failed mini-grid) and a results footer. The browser is
+    // still the scheduler, but the sites advance INDEPENDENTLY: as soon as one site's pre batch
+    // completes it enters the single-file update FIFO (max ONE run_update in flight, ordered by
+    // pre completion); when its update returns, its own post batch is dispatched and polled. ONE
+    // bundled poll loop covers all currently interesting batches; the comparisons are created
+    // server-side as the post screenshots finish, so results stream in per site.
 
     var RUN_STEPS = [
         { id: 'pre',    lbl: 'phasePre',     verb: 'verbPre' },
@@ -1031,7 +1035,10 @@
         { id: 'post',   lbl: 'phasePost',    verb: 'verbPost' },
         { id: 'done',   lbl: 'phaseDone',    verb: 'verbDone' }
     ];
-    var SITE_STATUS = ['statusPre', 'statusUpdating', 'statusPost', 'statusComparing'];
+    // Per-site pipeline phases mapped onto the 4 timeline steps: update_queued/updating share the
+    // UPDATES step; post_dispatch (take_post in flight) already counts as POST; done/failed are
+    // terminal.
+    var PHASE_RANK = { pre: 0, update_queued: 1, updating: 1, post_dispatch: 2, post: 2, done: 3, failed: 3 };
 
     function shotPanel(titleKey) {
         var pill = el('span', { class: 'wcd-run__statepill' });
@@ -1123,13 +1130,25 @@
         var sitesWrap = el('div', { class: 'wcd-run__sites' });
         checkSites.forEach(function (s) {
             var count = el('span', { class: 'wcd-run__sitecount', text: '0/' + s.checks });
-            var spill = el('span', { class: 'wcd-run__sitepill', text: t(SITE_STATUS[0]) });
-            siteRefs[s.site_id] = { count: count, pill: spill, total: s.checks };
+            var spill = el('span', { class: 'wcd-run__sitepill', text: t('statusPre') });
+            // Webapp-style mini-grid per site row: its own Queue/Processing/Done/Failed counters,
+            // fed from the poll's by_batch breakdown (the phase decides pre vs post bucket).
+            var cells = {};
+            var grid = el('div', { class: 'wcd-run__sitegrid' });
+            [['queue', 'queue'], ['processing', 'processing'], ['done', 'doneCount'], ['failed', 'failed']].forEach(function (c) {
+                var val = el('div', { class: 'wcd-run__minival', text: '0' });
+                cells[c[0]] = val;
+                grid.appendChild(el('div', { class: 'wcd-run__minicell' }, [el('div', { class: 'wcd-run__minilbl', text: t(c[1]) }), val]));
+            });
+            siteRefs[s.site_id] = { count: count, pill: spill, cells: cells, total: s.checks };
             sitesWrap.appendChild(el('div', { class: 'wcd-run__site' }, [
-                el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
-                el('span', { class: 'wcd-run__sitename', text: s.name }),
-                count,
-                spill
+                el('div', { class: 'wcd-run__siterow' }, [
+                    el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
+                    el('span', { class: 'wcd-run__sitename', text: s.name }),
+                    count,
+                    spill
+                ]),
+                grid
             ]));
         });
 
@@ -1151,83 +1170,333 @@
         setWidth(run.fill, run.frac * 100);
     }
 
-    function setPhase(run, idx) {
-        run.phaseIdx = idx;
-        RUN_STEPS.forEach(function (st, i) {
-            run.stepNodes[st.id].className = 'wcd-run__step' + (i < idx ? ' is-done' : i === idx ? ' is-active' : '');
+    /* ── Per-site pipeline state machine ─────────────────────────────────── */
+    // Every run site is tracked in run.pipe[siteId]: { site, hasChecks, phase, preBatch,
+    // postBatch, preBucket, postBucket, flagged, resultsPending }. Sites without checks skip the
+    // screenshot phases: they only pass through the update FIFO and are done when their update
+    // returns (they were always updated without screenshots).
+
+    function initPipeline(run) {
+        run.pipe = {};
+        run.updateQueue = [];                   // FIFO of site ids waiting for their run_update
+        run.updateBusy = false;                 // max ONE run_update in flight (single-file queue)
+        run.mutationLane = Promise.resolve();   // single writer lane for the structural run state
+        run.polling = false;
+        run.finished = false;
+        run.failed = false;
+        run.progressed = false;
+        run.sites.forEach(function (s) {
+            run.pipe[s.site_id] = {
+                site: s,
+                hasChecks: s.checks > 0,
+                phase: 'pre',
+                preBatch: '',
+                postBatch: '',
+                preBucket: null,
+                postBucket: null,
+                flagged: 0,
+                resultsPending: false,
+                error: ''
+            };
         });
-        run.sub.textContent = t(RUN_STEPS[idx].verb) + ' · ' + run.checkSites.length + ' ' +
-            plural(run.checkSites.length, t('site'), t('sitesPlural')) + ' · ' + t('dontClose');
-        setStatePill(run.pre.pill, idx > 0 ? 'done' : 'active', 'shot');
-        setStatePill(run.upd.pill, idx > 1 ? 'done' : 1 === idx ? 'active' : 'wait', 'upd');
-        setStatePill(run.post.pill, idx > 2 ? 'done' : 2 === idx ? 'active' : 'wait', 'shot');
-        run.upd.proc.textContent = 1 === idx
-            ? String(run.sites.reduce(function (n, s) { return n + (s.updates ? s.updates.total : 0); }, 0))
-            : '0';
-        Object.keys(run.siteRefs).forEach(function (k) { run.siteRefs[k].pill.textContent = t(SITE_STATUS[idx]); });
     }
 
-    function setSiteCounts(run, batchBySite, byBatch) {
-        if (!byBatch) { return; }
-        Object.keys(batchBySite).forEach(function (sid) {
-            var ref = run.siteRefs[sid];
-            var b   = byBatch[batchBySite[sid]];
-            // Cap at the site's own total: against an older API several sites can share one
-            // batch (transitional fallback), whose counts cover the whole batch.
-            if (ref && b) { ref.count.textContent = Math.min(b.done || 0, ref.total) + '/' + ref.total; }
+    // ALL mutating AJAX (take_pre / run_update / take_post / run_resume_post) goes through this
+    // shared promise lane, so the server-side structural run option only ever has one writer at a
+    // time (a concurrent read-modify-write could silently drop a recorded batch).
+    function mutate(run, fn) {
+        var result = run.mutationLane.then(fn);
+        run.mutationLane = result.catch(function () {});
+        return result;
+    }
+
+    function eachSite(run, fn) {
+        Object.keys(run.pipe).forEach(function (sid) { fn(run.pipe[sid], sid); });
+    }
+
+    function allTerminal(run) {
+        var open = 0;
+        eachSite(run, function (st) { if (3 !== PHASE_RANK[st.phase]) { open++; } });
+        return 0 === open;
+    }
+
+    function bucketFinished(b) { return b ? (b.done || 0) + (b.failed || 0) : 0; }
+
+    // Per-site complete mirrors the server's aggregate rule (queue empty AND something finished),
+    // so a site never advances on a batch whose queue has not been populated yet.
+    function bucketComplete(b) {
+        return !!b && 0 === (b.queue || 0) + (b.processing || 0) && bucketFinished(b) > 0;
+    }
+
+    // The mini-grid shows the bucket of the phase the site is in: the pre bucket up to and
+    // including its update, the post bucket from the post dispatch on (terminal sites keep the
+    // last bucket they reached).
+    function siteBucket(st) {
+        return (PHASE_RANK[st.phase] >= 2 && st.postBucket) ? st.postBucket : st.preBucket;
+    }
+
+    function setSitePhase(run, sid, phase) {
+        var st = run.pipe[sid];
+        if (!st || st.phase === phase) { return; }
+        st.phase = phase;
+        run.progressed = true;   // a transition counts as progress for the stall counter
+        renderSiteRow(run, st, sid);
+    }
+
+    // One site row: done/total counter, phase pill and the Queue/Processing/Done/Failed mini-grid.
+    function renderSiteRow(run, st, sid) {
+        var ref = run.siteRefs[sid];
+        if (!ref) { return; }   // sites without checks have no row
+        var bucket = siteBucket(st) || { queue: st.site.checks, processing: 0, done: 0, failed: 0 };
+        ref.cells.queue.textContent = String(bucket.queue || 0);
+        ref.cells.processing.textContent = String(bucket.processing || 0);
+        ref.cells.done.textContent = String(bucket.done || 0);
+        ref.cells.failed.textContent = String(bucket.failed || 0);
+        // Cap at the site's own total: against an older API several sites can share one batch
+        // (transitional fallback), whose counts cover the whole batch.
+        ref.count.textContent = Math.min(bucket.done || 0, ref.total) + '/' + ref.total;
+        setSitePill(ref.pill, st, bucket);
+    }
+
+    function setSitePill(pill, st, bucket) {
+        pill.removeAttribute('data-tooltip');
+        if ('failed' === st.phase) {
+            pill.className = 'wcd-run__sitepill is-failed';
+            pill.textContent = t('statusFailed');
+            // Surface the per-site error (e.g. a 402 from its take_post) as a native tooltip.
+            if (st.error) { pill.setAttribute('data-tooltip', st.error); }
+            return;
+        }
+        if ('done' === st.phase) {
+            if (st.resultsPending) {   // post done, comparisons summary still loading
+                pill.className = 'wcd-run__sitepill is-active';
+                pill.textContent = t('statusDone');
+                return;
+            }
+            pill.className = 'wcd-run__sitepill ' + (st.flagged > 0 ? 'is-flagged' : 'is-clean');
+            pill.textContent = st.flagged > 0 ? fmt(t('toReview'), { '%d': st.flagged }) : t('clean');
+            return;
+        }
+        if ('update_queued' === st.phase) {
+            pill.className = 'wcd-run__sitepill';
+            pill.textContent = t('statusWaiting');
+            return;
+        }
+        var key = 'updating' === st.phase ? 'statusUpdating'
+            : 'pre' === st.phase ? 'statusPre'
+                : ('post' === st.phase && 0 === (bucket.queue || 0) && (bucket.processing || 0) > 0) ? 'statusComparing' : 'statusPost';
+        pill.className = 'wcd-run__sitepill is-active';
+        pill.textContent = t(key);
+    }
+
+    /* ── Single-file update FIFO ─────────────────────────────────────────── */
+    // Max ONE run_update in flight, ordered by pre completion: the synchronous multi-minute call
+    // binds one dashboard PHP worker per site, and MainWP's update abilities are not documented
+    // for parallel calls (guarded internal-call contract, not to be widened).
+
+    function enqueueUpdate(run, sid) {
+        setSitePhase(run, sid, 'update_queued');
+        run.updateQueue.push(sid);
+        drainUpdateQueue(run);
+    }
+
+    function drainUpdateQueue(run) {
+        if (run.updateBusy || run.failed) { return; }
+        var sid = run.updateQueue.shift();
+        if (undefined === sid) { return; }
+        var st = run.pipe[sid];
+        run.updateBusy = true;
+        setSitePhase(run, sid, 'updating');
+        renderRun(run);
+        // Tolerate a per-site update failure (e.g. offline): the post screenshots still run.
+        mutate(run, function () { return api('run_update', { site_id: st.site.site_id }).catch(function () {}); }).then(function () {
+            if (!st.hasChecks) {
+                setSitePhase(run, sid, 'done');   // no screenshots: the update ends this site's pipeline
+                return null;
+            }
+            setSitePhase(run, sid, 'post_dispatch');
+            renderRun(run);
+            return mutate(run, function () { return api('take_post', { site_ids: [st.site.site_id] }); });
+        }).then(function (d) {
+            if (!d) { return; }
+            var batch = (d.batches || {})[st.site.site_id];
+            if (!batch) { throw new Error(t('genericError')); }
+            st.postBatch = String(batch);
+            setSitePhase(run, sid, 'post');
+        }).catch(function (e) {
+            st.error = e && e.message ? e.message : '';
+            setSitePhase(run, sid, 'failed');   // only this site fails; the rest keeps going
+        }).finally(function () {
+            run.updateBusy = false;
+            renderRun(run);
+            drainUpdateQueue(run);
+            maybeFinish(run);
         });
     }
 
-    // Poll all of a phase's batches at once, feeding aggregate + per-batch counts each tick.
-    // POST-phase polls also pass the run's PRE batches: the server needs their failed count to
-    // settle checks whose pre screenshot failed (their comparison is never created).
-    // The try counter only advances while NOTHING completes, so a big run that is still making
-    // progress never hits the stall timeout; only a genuinely stuck queue does.
-    function pollBatches(batches, onTick, preBatches) {
-        batches = (batches || []).filter(Boolean);
-        if (!batches.length) { return Promise.resolve(); }
-        preBatches = (preBatches || []).filter(Boolean);
+    // A site's post batch completed: fetch its comparisons and settle the row (streamed results).
+    function siteResults(run, st, sid) {
+        st.resultsPending = true;
+        setSitePhase(run, sid, 'done');
+        api('results', { batch: st.postBatch }).then(function (data) {
+            // "To review" = a real visual change (>0%) or one explicitly marked to fix. A bare
+            // "new" with 0% is an unchanged, un-triaged comparison and counts as clean.
+            st.flagged = (data.comparisons || []).filter(function (c) {
+                return (Number(c.percent) || 0) > 0 || 'to_fix' === c.status;
+            }).length;
+        }).catch(function () { st.flagged = 0; }).then(function () {
+            st.resultsPending = false;
+            renderSiteRow(run, st, sid);
+            maybeFinish(run);
+        });
+    }
+
+    // The run is over once every site is terminal AND no per-site results fetch is pending.
+    function maybeFinish(run) {
+        if (run.failed || run.finished || !allTerminal(run)) { return; }
+        var pending = false;
+        eachSite(run, function (st) { if (st.resultsPending) { pending = true; } });
+        if (!pending) { finishRun(run); }
+    }
+
+    /* ── ONE bundled poll loop for the whole run ─────────────────────────── */
+    // Each tick sends every currently interesting batch: the pre batches of sites still in PRE
+    // and the post batches of sites in POST (as `batches`), plus the completed pre batches as
+    // `pre_batches` (their raw buckets keep feeding the mini-grids and their failed counts settle
+    // post checks whose pre screenshot failed). Never one poll per site. The try counter only
+    // advances while NOTHING progresses, so a big run that is still moving never hits the stall
+    // timeout; only a genuinely stuck queue does.
+
+    function pollTargets(run) {
+        var batches = [];
+        var preBatches = [];
+        eachSite(run, function (st) {
+            if ('pre' === st.phase && st.preBatch) { batches.push(st.preBatch); }
+            else if ('post' === st.phase && st.postBatch) { batches.push(st.postBatch); }
+            if ('pre' !== st.phase && st.preBatch) { preBatches.push(st.preBatch); }
+        });
         var payload = { batches: batches };
         if (preBatches.length) { payload.pre_batches = preBatches; }
+        return payload;
+    }
+
+    function startPollLoop(run) {
+        if (run.polling) { return; }
+        run.polling = true;
         var tries = 0;
-        var lastFinished = -1;
-        function loop() {
+
+        function tick() {
+            if (run.failed || run.finished || allTerminal(run)) { run.polling = false; return Promise.resolve(); }
+            var payload = pollTargets(run);
+            if (!payload.batches.length) {
+                // Nothing pollable right now (e.g. every remaining site is mid-update): idle
+                // without advancing the stall counter; the update FIFO makes its own progress.
+                return delay(POLL_INTERVAL).then(tick);
+            }
+            run.progressed = false;
             return api('poll', payload).then(function (data) {
-                if (onTick) { onTick(data); }
-                // Resolve with the final tick so callers can render the real done/failed counts.
-                if (data.complete) { return data; }
-                var finished = (data.done || 0) + (data.failed || 0);
-                if (finished !== lastFinished) { lastFinished = finished; tries = 0; }
-                tries++;
+                applyPollTick(run, data.by_batch || {});
+                tries = run.progressed ? 0 : tries + 1;
                 if (tries >= POLL_MAX_TRIES) { throw new Error(t('stillRunning')); }
-                return delay(POLL_INTERVAL).then(loop);
+                renderRun(run);
+                maybeFinish(run);
+                if (run.failed || run.finished || allTerminal(run)) { run.polling = false; return; }
+                return delay(POLL_INTERVAL).then(tick);
             });
         }
-        return loop();
+
+        tick().catch(function (e) { run.polling = false; failRun(run, e); });
     }
 
-    function runUpdatesSequential(sites) {
-        return sites.reduce(function (chain, s) {
-            return chain.then(function () {
-                // Tolerate a per-site update failure (e.g. offline): the post screenshots still run.
-                return api('run_update', { site_id: s.site_id }).catch(function () {});
-            });
-        }, Promise.resolve());
+    // Fold one poll tick into the per-site states: refresh the cached buckets (with the per-site
+    // pre-fail shift on post buckets) and fire the per-site transitions.
+    function applyPollTick(run, byBatch) {
+        eachSite(run, function (st, sid) {
+            if (st.preBatch && byBatch[st.preBatch]) {
+                if (bucketFinished(byBatch[st.preBatch]) !== bucketFinished(st.preBucket)) { run.progressed = true; }
+                st.preBucket = byBatch[st.preBatch];
+            }
+            if (st.postBatch && byBatch[st.postBatch]) {
+                var b = byBatch[st.postBatch];
+                // A check whose pre screenshot failed never gets a comparison: shift it from
+                // processing to failed, per site (mirrors the server's aggregate shift).
+                var shift = Math.min(st.preBucket ? (st.preBucket.failed || 0) : 0, b.processing || 0);
+                b = { queue: b.queue || 0, processing: (b.processing || 0) - shift, done: b.done || 0, failed: (b.failed || 0) + shift };
+                if (bucketFinished(b) !== bucketFinished(st.postBucket)) { run.progressed = true; }
+                st.postBucket = b;
+            }
+            if ('pre' === st.phase && bucketComplete(st.preBucket)) {
+                enqueueUpdate(run, sid);   // FIFO order = pre completion order
+            } else if ('post' === st.phase && bucketComplete(st.postBucket)) {
+                siteResults(run, st, sid);
+            }
+            renderSiteRow(run, st, sid);
+        });
     }
 
-    function collectResults(postBatchBySite) {
-        var flagged = {};
-        return Object.keys(postBatchBySite).reduce(function (chain, sid) {
-            return chain.then(function () {
-                return api('results', { batch: postBatchBySite[sid] }).then(function (data) {
-                    // "To review" = a real visual change (>0%) or one explicitly marked to fix. A bare
-                    // "new" with 0% is an unchanged, un-triaged comparison and counts as clean.
-                    flagged[sid] = (data.comparisons || []).filter(function (c) {
-                        return (Number(c.percent) || 0) > 0 || 'to_fix' === c.status;
-                    }).length;
-                }).catch(function () { flagged[sid] = 0; });
-            });
-        }, Promise.resolve()).then(function () { return flagged; });
+    /* ── Card rendering (aggregate panels + timeline) ────────────────────── */
+
+    function addBucket(sum, b) {
+        sum.queue += b.queue || 0;
+        sum.processing += b.processing || 0;
+        sum.done += b.done || 0;
+        sum.failed += b.failed || 0;
+    }
+
+    // Mean per-site progress drives the timeline fill: each site contributes thirds (pre, update,
+    // post), weighted by its own finished-check count where a batch is in flight.
+    function siteProgress(st) {
+        var rank = PHASE_RANK[st.phase];
+        if (3 === rank) { return 1; }
+        var total = st.site.checks || 0;
+        function frac(b) { return total ? Math.min(bucketFinished(b), total) / total : 0; }
+        if (0 === rank) { return frac(st.preBucket) / 3; }
+        if (1 === rank) { return 1 / 3; }
+        return 2 / 3 + ('post' === st.phase ? frac(st.postBucket) / 3 : 0);
+    }
+
+    // Recompute the aggregate panels, the timeline and the subtitle from the per-site states. The
+    // three panels stay aggregates: Pre sums every pre bucket, Post sums every post bucket and
+    // Updates counts the pending update items of the queued + updating sites. A timeline node is
+    // done only when EVERY site passed that phase; the fill is the mean per-site progress.
+    function renderRun(run) {
+        if (!run.pipe || run.finished || run.failed) { return; }
+        var pre = { queue: 0, processing: 0, done: 0, failed: 0 };
+        var post = { queue: 0, processing: 0, done: 0, failed: 0 };
+        var inPhase = { pre: 0, updates: 0, post: 0 };
+        var updItems = 0;
+        var progress = 0;
+        var count = 0;
+        var minRank = 3;
+        eachSite(run, function (st) {
+            count++;
+            var rank = PHASE_RANK[st.phase];
+            minRank = Math.min(minRank, rank);
+            if (0 === rank) { inPhase.pre++; }
+            if (1 === rank) {
+                inPhase.updates++;
+                updItems += st.site.updates ? st.site.updates.total : 0;
+            }
+            if (2 === rank) { inPhase.post++; }
+            if (st.hasChecks) {
+                addBucket(pre, st.preBucket || { queue: st.site.checks, processing: 0, done: 0, failed: 0 });
+                if (st.postBucket) { addBucket(post, st.postBucket); }
+                else if (2 === rank) { post.queue += st.site.checks; }
+            }
+            progress += siteProgress(st);
+        });
+        setShot(run.pre, pre);
+        setShot(run.post, post);
+        run.upd.proc.textContent = String(updItems);
+        setStatePill(run.pre.pill, inPhase.pre > 0 ? 'active' : 'done', 'shot');
+        setStatePill(run.upd.pill, inPhase.updates > 0 ? 'active' : (minRank >= 2 ? 'done' : 'wait'), 'upd');
+        setStatePill(run.post.pill, inPhase.post > 0 ? 'active' : (3 === minRank ? 'done' : 'wait'), 'shot');
+        RUN_STEPS.forEach(function (step, i) {
+            run.stepNodes[step.id].className = 'wcd-run__step' + (i < minRank ? ' is-done' : i === minRank ? ' is-active' : '');
+        });
+        setFill(run, count ? progress / count : 0);
+        run.sub.textContent = t(RUN_STEPS[minRank].verb) + ' · ' + run.checkSites.length + ' ' +
+            plural(run.checkSites.length, t('site'), t('sitesPlural')) + ' · ' + t('dontClose');
     }
 
     function startRun(host, trigger, sites) {
@@ -1247,7 +1516,7 @@
             names: checkSites.map(function (s) { return s.name; }),
             checks: checkSites.map(function (s) { return s.checks; })
         }).catch(function () {});
-        tracking.then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
+        tracking.then(function () { return runPipeline(run); }).catch(function (e) { failRun(run, e); });
     }
 
     // Build the run card INSIDE the modal and render the "Updates running" reopen button next to the
@@ -1331,64 +1600,31 @@
         if (heartbeatTimer) { window.clearInterval(heartbeatTimer); heartbeatTimer = null; }
     }
 
-    function runPhased(run) {
-        var preBatchBySite = {}, postBatchBySite = {};
-        var total = run.total;
-
-        // PRE
-        setPhase(run, 0);
-        // Show everything as queued straight away so the panel isn't 0/0/0/0 until the first poll.
-        setShot(run.pre, { queue: total, processing: 0, done: 0, failed: 0 });
-        // ONE bulk call starts the whole phase (the server fans out chunked batch-per-group
-        // take calls), instead of one round trip per site.
-        return api('take_pre', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
-            preBatchBySite = d.batches || {};
-        }).then(function () {
-            return pollBatches(values(preBatchBySite), function (data) {
-                setShot(run.pre, data);
-                setSiteCounts(run, preBatchBySite, data.by_batch);
-                setFill(run, (total ? (data.done || 0) / total : 1) / 3);
+    // Fresh run: seed every site into the pipeline, dispatch ONE bulk take_pre for all check
+    // sites (the server fans out chunked batch-per-group take calls), then let the poll loop
+    // advance each site on its own. Sites without checks skip PRE and join the update FIFO first.
+    // End of server-side tracking: record_post_batch self-clears the run state once the LAST
+    // site's post batch is recorded (no explicit run_discard on the happy path anymore).
+    function runPipeline(run) {
+        initPipeline(run);
+        renderRun(run);
+        var ids = run.checkSites.map(function (s) { return s.site_id; });
+        // Register the bulk take_pre in the mutation lane FIRST: enqueueing a zero-check site
+        // before it would put that site's synchronous multi-minute run_update ahead of the pre
+        // dispatch in the FIFO lane and stall every check site's screenshots behind it.
+        var pre = mutate(run, function () { return api('take_pre', { site_ids: ids }); });
+        eachSite(run, function (st, sid) { if (!st.hasChecks) { enqueueUpdate(run, sid); } });
+        return pre.then(function (d) {
+            var batches = d.batches || {};
+            run.checkSites.forEach(function (s) {
+                if (batches[s.site_id]) { run.pipe[s.site_id].preBatch = String(batches[s.site_id]); }
             });
-        }).then(function (final) {
-            // Render the final poll counts (a failed pre screenshot must stay visible as failed).
-            setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
-            // UPDATES
-            setPhase(run, 1);
-            setFill(run, 1 / 3);
-            return runUpdatesSequential(run.sites);
-        }).then(function () {
-            // POST
-            setPhase(run, 2);
-            setFill(run, 2 / 3);
-            setShot(run.post, { queue: total, processing: 0, done: 0, failed: 0 });
-            return api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
-                postBatchBySite = d.batches || {};
-            });
-        }).then(function () {
-            // Every post batch is dispatched, so the run can no longer be lost: stop tracking it
-            // explicitly. The bulk take_post records all batches in one handler, but this clear
-            // stays the authoritative end of tracking. Best effort.
-            api('run_discard', {}).catch(function () {});
-            // Keep the pre batches around: re-check polls compare against the same pre screenshots.
-            run.preBatches = values(preBatchBySite);
-            return pollBatches(values(postBatchBySite), function (data) {
-                setShot(run.post, data);
-                setSiteCounts(run, postBatchBySite, data.by_batch);
-                setFill(run, 2 / 3 + (total ? (data.done || 0) / total : 1) / 3);
-            }, run.preBatches);
-        }).then(function (final) {
-            setShot(run.post, final || { queue: 0, processing: 0, done: total, failed: 0 });
-            // DONE
-            setPhase(run, 3);
-            return collectResults(postBatchBySite);
-        }).then(function (flagged) {
-            finishRun(run, flagged);
+            startPollLoop(run);
         });
     }
 
-    function values(obj) { return Object.keys(obj).map(function (k) { return obj[k]; }); }
-
-    function finishRun(run, flagged) {
+    function finishRun(run) {
+        run.finished = true;
         activeRun = false;
         stopHeartbeat();
         setTriggerRunning(run.trigger, false);
@@ -1406,15 +1642,22 @@
         run.upd.proc.textContent = '0';
         setStatePill(run.post.pill, 'done', 'shot');
 
+        // Per-site verdicts were streamed in as each site finished; here we only sum them up and
+        // re-render the rows (the counters keep the last polled done/total, so a failed check
+        // never shows as done).
         var totalFlagged = 0;
-        Object.keys(run.siteRefs).forEach(function (sid) {
-            var ref = run.siteRefs[sid];
-            var f   = flagged[sid] || 0;
-            totalFlagged += f;
-            // The counter keeps the last polled done/total (a failed check must not show as done).
-            ref.pill.className = 'wcd-run__sitepill ' + (f > 0 ? 'is-flagged' : 'is-clean');
-            ref.pill.textContent = f > 0 ? fmt(t('toReview'), { '%d': f }) : t('clean');
+        var anyFailed = false;
+        eachSite(run, function (st, sid) {
+            totalFlagged += st.flagged || 0;
+            if ('failed' === st.phase) { anyFailed = true; }
+            renderSiteRow(run, st, sid);
         });
+        // A run that finished WITH a failed site never reaches the record_post_batch self-clear
+        // (that site has no post batch), so the server state would linger and auto-resume itself
+        // after the idle gate on every page load. The user has seen the verdict here: drop the
+        // tracking (best effort). Clean runs already self-cleared server-side; failRun keeps the
+        // state on purpose so an aborted run stays resumable.
+        if (anyFailed) { api('run_discard', {}).catch(function () {}); }
         renderRunFooter(run, totalFlagged);
         // Run finished: the card's dismiss now appears (single close), the keep-open warning goes
         // away, and the reopen button shows the verdict (visible when the popup is closed).
@@ -1440,29 +1683,15 @@
         }
     }
 
-    // Shared POST phase: poll the given post batches, collect the comparisons, finish the card.
-    // Used by the in-run flow's re-check and by the resume of an interrupted run.
-    function runPostPhase(run, postBatchBySite) {
-        setPhase(run, 2);
-        setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
-        setFill(run, 2 / 3);
-        return pollBatches(values(postBatchBySite), function (data) {
-            setShot(run.post, data);
-            setSiteCounts(run, postBatchBySite, data.by_batch);
-            setFill(run, 2 / 3 + (run.total ? (data.done || 0) / run.total : 1) / 3);
-        }, run.preBatches).then(function (final) {
-            setShot(run.post, final || { queue: 0, processing: 0, done: run.total, failed: 0 });
-            setPhase(run, 3);
-            return collectResults(postBatchBySite);
-        }).then(function (flagged) {
-            finishRun(run, flagged);
-        });
-    }
-
-    // Re-check re-runs only the POST screenshots + comparison for the run's sites.
+    // Re-check re-runs only the POST screenshots + comparisons for the run's check sites, through
+    // the same per-site pipeline (one bundled take_post dispatch, the shared poll loop, streamed
+    // per-site results). The cached pre buckets stay: their failed counts still shift the new
+    // post batches' orphaned checks.
     function recheckRun(run) {
-        if (run.rechecking) { return; }
+        if (run.rechecking || !run.pipe) { return; }
         run.rechecking = true;
+        run.finished = false;
+        run.failed = false;
         activeRun = true;
         startHeartbeat();
         renderReopenButton(run, 'green', 'sync loading icon', t('reopenRunning'));
@@ -1476,21 +1705,40 @@
         run.foot.innerHTML = '';
         run.foot.appendChild(el('span', { class: 'wcd-muted', text: t('runFooterNote') }));
 
-        setPhase(run, 2);
-        setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
-        setFill(run, 2 / 3);
-        api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) }).then(function (d) {
-            return runPostPhase(run, d.batches || {});
+        var ids = [];
+        eachSite(run, function (st) {
+            if (!st.hasChecks) { return; }   // no screenshots for this site; it stays terminal
+            st.phase = 'post_dispatch';
+            st.postBatch = '';
+            st.postBucket = null;
+            st.flagged = 0;
+            st.error = '';
+            ids.push(st.site.site_id);
+        });
+        renderRun(run);
+        mutate(run, function () { return api('take_post', { site_ids: ids }); }).then(function (d) {
+            var batches = d.batches || {};
+            eachSite(run, function (st, sid) {
+                if (!st.hasChecks) { return; }
+                if (batches[st.site.site_id]) {
+                    st.postBatch = String(batches[st.site.site_id]);
+                    setSitePhase(run, sid, 'post');
+                } else {
+                    setSitePhase(run, sid, 'failed');
+                }
+            });
+            startPollLoop(run);
         }).catch(function (e) {
             failRun(run, e);
-        }).then(function () { run.rechecking = false; });
+        }).finally(function () { run.rechecking = false; });
     }
 
     /* ─────────────────────── Resume an interrupted run ─────────────────── */
-    // The run state lives server-side (recorded by the AJAX endpoints as the run progresses). On any
-    // page that hosts the entry point, a still-active run is picked up automatically on load and
-    // continued at its persisted phase (the popup reopens). A run whose heartbeat is still fresh
-    // looks like another tab is driving it, so we leave it alone and re-check after a short window.
+    // The run state lives server-side (recorded per site by the AJAX endpoints as the run
+    // progresses). On any page that hosts the entry point, a still-active run is picked up
+    // automatically on load and continued through the same per-site state machine (in the
+    // background; the "Updates running" button opens the popup). A run whose heartbeat is still
+    // fresh looks like another tab is driving it, so we leave it alone and re-check shortly.
 
     function checkResume() {
         if (activeRunRef) { return; }   // this tab already owns/drives a run
@@ -1547,8 +1795,13 @@
         setTriggerRunning(document.querySelector('.wcd-safe-update'), false);
     }
 
-    // Rebuild the run card from the persisted state and continue at its phase. The tracked sites are
-    // exactly the run's check sites (run_start only records sites with checks).
+    // Rebuild the run card from the persisted state and continue: the SAME per-site state machine,
+    // just seeded from the persisted per-site fields (the legacy global `phase` is ignored):
+    //   post batch recorded -> poll it (post)
+    //   in updated_sites    -> ONE bundled run_resume_post dispatches its missing post batch
+    //   pre batch recorded  -> poll it (NEVER re-take: credit safety)
+    //   nothing recorded    -> ONE bundled take_pre
+    // The tracked sites are exactly the run's check sites (run_start only records sites with checks).
     function resumeRun(host, state) {
         if (activeRunRef || activeRun) { return; }   // a takeover is already under way in this tab
         var sites = (state.sites || []).map(function (s) {
@@ -1566,72 +1819,104 @@
         // "Updates running" button next to the widget heading lets the user open it when they want.
         var run = mountRun(host, trigger, sites, sites, single, total, false);
         startHeartbeat();
+        initPipeline(run);
 
-        run.preBatches = values(state.pre_batches || {});
-        var updated    = (state.updated_sites || []).map(Number);
-        var notUpdated = sites.filter(function (s) { return updated.indexOf(s.site_id) === -1; });
-
-        // POST: pre + updates already ran. Let the server take any missing post screenshots (it
-        // re-purges the now-stale caches) and poll them in.
-        if ('post' === state.phase) {
-            setPhase(run, 2);
-            setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
-            api('run_resume_post', {}).then(function (d) {
-                if (d.warning) { window.alert(d.warning); }
-                run.preBatches = values(d.pre_batches || {});
-                return runPostPhase(run, d.batches || {});
-            }).catch(function (e) { failRun(run, e); });
-            return;
+        var seeds = seedPipeline(run, state);
+        renderRun(run);
+        var lastSeedError = null;
+        // A rejected seed bundle (e.g. every requested site unresumable, or a 402 on the bundled
+        // take_pre) must not abandon the healthy sites already seeded with live batches: fail only
+        // the sites of THAT bundle and keep the rest going.
+        function seedStep(fn, ids) {
+            return function () {
+                return fn(run, ids).catch(function (e) {
+                    lastSeedError = e;
+                    ids.forEach(function (sid) {
+                        var st = run.pipe[sid];
+                        if (st && 3 !== PHASE_RANK[st.phase]) {
+                            st.error = e && e.message ? e.message : '';
+                            setSitePhase(run, sid, 'failed');
+                        }
+                    });
+                });
+            };
         }
-
-        // UPDATES: pre done; finish the remaining updates, then post.
-        if ('updates' === state.phase) {
-            setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
-            resumeUpdatesThenPost(run, sites, notUpdated).catch(function (e) { failRun(run, e); });
-            return;
-        }
-
-        // PRE (default): finish the pre screenshots (take any still missing, poll all), then continue.
-        setPhase(run, 0);
-        var preBatchBySite = {};
-        Object.keys(state.pre_batches || {}).forEach(function (k) { preBatchBySite[k] = state.pre_batches[k]; });
-        var missingPre = sites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
-        var ensurePre = missingPre.length
-            ? api('take_pre', { site_ids: missingPre }).then(function (d) {
-                Object.keys(d.batches || {}).forEach(function (k) { preBatchBySite[k] = d.batches[k]; });
-            })
-            : Promise.resolve();
-        ensurePre.then(function () {
-            run.preBatches = values(preBatchBySite);
-            setShot(run.pre, { queue: total, processing: 0, done: 0, failed: 0 });
-            return pollBatches(values(preBatchBySite), function (data) {
-                setShot(run.pre, data);
-                setSiteCounts(run, preBatchBySite, data.by_batch);
-                setFill(run, (total ? (data.done || 0) / total : 1) / 3);
+        var chain = Promise.resolve();
+        if (seeds.resume.length) { chain = chain.then(seedStep(resumeUpdatedSites, seeds.resume)); }
+        if (seeds.fresh.length) { chain = chain.then(seedStep(takeMissingPre, seeds.fresh)); }
+        chain.then(function () {
+            renderRun(run);
+            var pollable = false;
+            eachSite(run, function (st) {
+                if (3 !== PHASE_RANK[st.phase] && (st.preBatch || st.postBatch)) { pollable = true; }
             });
-        }).then(function (final) {
-            setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
-            return resumeUpdatesThenPost(run, sites, notUpdated);
+            // Only when NOTHING is left to poll does the whole card fail (the server state stays,
+            // so a later resume can retry); otherwise the healthy sites finish normally.
+            if (!pollable && lastSeedError) { failRun(run, lastSeedError); return; }
+            startPollLoop(run);
+            maybeFinish(run);
         }).catch(function (e) { failRun(run, e); });
     }
 
-    // Shared tail for a resumed run: update the not-yet-updated sites, then take + poll the post phase.
-    function resumeUpdatesThenPost(run, sites, notUpdated) {
-        setPhase(run, 1);
-        setFill(run, 1 / 3);
-        return runUpdatesSequential(notUpdated).then(function () {
-            setPhase(run, 2);
-            setFill(run, 2 / 3);
-            setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
-            return api('take_post', { site_ids: sites.map(function (s) { return s.site_id; }) });
-        }).then(function (d) {
-            // Every post batch is dispatched: stop tracking (the rest finishes server-side).
-            api('run_discard', {}).catch(function () {});
-            return runPostPhase(run, d.batches || {});
+    // Derive each site's re-entry point from the persisted per-site fields. A site whose update
+    // was mid-flight when the tab died is not in updated_sites, so it re-enters via the FIFO
+    // (re-running its update is safe: nothing pending means success without a post).
+    function seedPipeline(run, state) {
+        var preB = state.pre_batches || {};
+        var postB = state.post_batches || {};
+        var updated = (state.updated_sites || []).map(Number);
+        var resume = [];
+        var fresh = [];
+        eachSite(run, function (st) {
+            var id = st.site.site_id;
+            if (preB[id]) { st.preBatch = String(preB[id]); }
+            if (postB[id]) {
+                st.postBatch = String(postB[id]);
+                st.phase = 'post';
+            } else if (updated.indexOf(id) !== -1) {
+                st.phase = 'post_dispatch';   // its updates ran; only its post batch is missing
+                resume.push(id);
+            } else if (!st.preBatch) {
+                fresh.push(id);   // nothing recorded yet: needs its pre screenshots
+            }
+            // else: pre batch recorded -> stay in 'pre' and poll it (never re-take).
+        });
+        return { resume: resume, fresh: fresh };
+    }
+
+    // ONE bundled run_resume_post for the already-updated sites: the server re-purges their (by
+    // now stale) caches, dispatches the missing post batches and records them.
+    function resumeUpdatedSites(run, ids) {
+        return mutate(run, function () { return api('run_resume_post', { site_ids: ids }); }).then(function (d) {
+            if (d.warning) { window.alert(d.warning); }
+            var batches = d.batches || {};
+            var pre = d.pre_batches || {};
+            ids.forEach(function (sid) {
+                var st = run.pipe[sid];
+                if (!st) { return; }
+                if (pre[sid]) { st.preBatch = String(pre[sid]); }
+                if (batches[sid]) {
+                    st.postBatch = String(batches[sid]);
+                    setSitePhase(run, sid, 'post');
+                } else {
+                    setSitePhase(run, sid, 'failed');   // skipped by the server (e.g. no mapping left)
+                }
+            });
+        });
+    }
+
+    // ONE bundled take_pre for the sites whose pre screenshots were never dispatched.
+    function takeMissingPre(run, ids) {
+        return mutate(run, function () { return api('take_pre', { site_ids: ids }); }).then(function (d) {
+            var batches = d.batches || {};
+            ids.forEach(function (sid) {
+                if (run.pipe[sid] && batches[sid]) { run.pipe[sid].preBatch = String(batches[sid]); }
+            });
         });
     }
 
     function failRun(run, e) {
+        run.failed = true;   // stops the poll loop and the update FIFO
         activeRun = false;
         stopHeartbeat();
         setTriggerRunning(run.trigger, false);
@@ -1926,9 +2211,191 @@
         load();
     }
 
+    /* ─────────────── Interaction Flows (per-site tab section) ───────────── */
+    // Only active where the site tab rendered #wcd-flows-section. Read-only list + the On-Demand
+    // toggle (enabled_manual); steps/runs/run-detail lazy-load per drill-in. The run detail polls
+    // flow_run_view every 10s (webapp parity) ONLY while it is open AND the run is still
+    // processing, with cleanup on close, accordion collapse, status settle and errors; ticks are
+    // skipped while the browser tab is hidden.
+
+    function initFlows() {
+        var root = document.getElementById('wcd-flows-section');
+        if (!root) { return; }
+        var siteId = parseInt(root.getAttribute('data-site-id'), 10) || 0;
+
+        var FLOW_POLL_INTERVAL = 10000;
+        var poll = { timer: null, node: null, runId: null, flowId: null };
+
+        function stopRunPoll() {
+            if (poll.timer) { window.clearInterval(poll.timer); }
+            poll.timer = null; poll.node = null; poll.runId = null; poll.flowId = null;
+        }
+
+        function startRunPoll(node, flowId, runId) {
+            stopRunPoll();
+            poll.node = node; poll.flowId = flowId; poll.runId = runId;
+            poll.timer = window.setInterval(pollTick, FLOW_POLL_INTERVAL);
+        }
+
+        function pollTick() {
+            // The detail view is gone (closed, reloaded, collapsed): stop for good.
+            if (!poll.node || !poll.node.isConnected || poll.node.hidden) { stopRunPoll(); return; }
+            // Browser tab in background: skip the request, resume on the next visible tick.
+            if (document.hidden) { return; }
+            // Freeze the polled run: if the user switches to another run detail while this request
+            // is in flight, the stale response must neither overwrite the new view nor stop its poll.
+            var tickRunId = poll.runId;
+            api('flow_run_view', { site_id: siteId, flow_id: poll.flowId, run_id: tickRunId }).then(function (d) {
+                if (poll.runId !== tickRunId) { return; }   // superseded: discard the stale response
+                if (!poll.node || !poll.node.isConnected) { stopRunPoll(); return; }
+                poll.node.innerHTML = d.html || '';
+                if ('processing' !== d.status) { stopRunPoll(); }
+            }).catch(function () {
+                if (poll.runId === tickRunId) { stopRunPoll(); }
+            });
+        }
+
+        function showError(node, message) {
+            node.innerHTML = '';
+            node.appendChild(el('p', { class: 'wcd-error', text: message }));
+        }
+
+        function loadList() {
+            api('flow_list', { site_id: siteId }).then(function (d) {
+                stopRunPoll();
+                root.innerHTML = d.html || '';
+            }).catch(function (e) {
+                showError(root, e.message);
+            });
+        }
+
+        function flowOf(node) { return node.closest('.wcd-flow'); }
+
+        function loadSteps(flowEl) {
+            var box = flowEl.querySelector('[data-role="flow-steps"]');
+            if (!box || box.getAttribute('data-loaded')) { return; }
+            box.setAttribute('data-loaded', '1');
+            box.innerHTML = '';
+            box.appendChild(el('div', { class: 'ui active inline loader' }));
+            api('flow_steps', { site_id: siteId, flow_id: flowEl.getAttribute('data-flow-id') }).then(function (d) {
+                box.innerHTML = d.html || '';
+            }).catch(function (e) {
+                // Allow a retry on the next expand.
+                box.removeAttribute('data-loaded');
+                showError(box, e.message);
+            });
+        }
+
+        function loadRuns(flowEl, page) {
+            var box = flowEl.querySelector('[data-role="flow-runs"]');
+            if (!box) { return; }
+            if (!page && box.getAttribute('data-loaded')) { return; }
+            box.setAttribute('data-loaded', '1');
+            // The run-detail host lives inside this box; a (re)load drops any polled view.
+            if (poll.node && box.contains(poll.node)) { stopRunPoll(); }
+            box.innerHTML = '';
+            box.appendChild(el('div', { class: 'ui active inline loader' }));
+            api('flow_runs', { site_id: siteId, flow_id: flowEl.getAttribute('data-flow-id'), page: page || 1 }).then(function (d) {
+                box.innerHTML = d.html || '';
+            }).catch(function (e) {
+                if (!page) { box.removeAttribute('data-loaded'); }
+                showError(box, e.message);
+            });
+        }
+
+        function toggleFlowRow(flowEl) {
+            var bodyRow = flowEl.querySelector('.wcd-flow-body');
+            if (!bodyRow) { return; }
+            var open = !bodyRow.hidden;
+            bodyRow.hidden = open;
+            var caret = flowEl.querySelector('.accordion-trigger i.icon');
+            if (caret) { caret.className = 'caret ' + (open ? 'right' : 'down') + ' icon'; }
+            if (open) {
+                // Collapsed: a polling run detail inside is no longer visible.
+                if (poll.node && flowEl.contains(poll.node)) { stopRunPoll(); }
+                return;
+            }
+            loadSteps(flowEl);
+            loadRuns(flowEl);
+        }
+
+        function viewRun(btn) {
+            var flowEl = flowOf(btn);
+            var host = flowEl ? flowEl.querySelector('[data-role="run-detail"]') : null;
+            if (!host) { return; }
+            var runId = btn.getAttribute('data-run-id');
+            if (!host.hidden && host.getAttribute('data-run-id') === runId) {
+                // Same run clicked again: close the detail.
+                host.hidden = true;
+                host.innerHTML = '';
+                host.removeAttribute('data-run-id');
+                stopRunPoll();
+                return;
+            }
+            stopRunPoll();
+            host.hidden = false;
+            host.setAttribute('data-run-id', runId);
+            host.innerHTML = '';
+            host.appendChild(el('div', { class: 'ui active inline loader' }));
+            var flowId = flowEl.getAttribute('data-flow-id');
+            api('flow_run_view', { site_id: siteId, flow_id: flowId, run_id: runId }).then(function (d) {
+                host.innerHTML = d.html || '';
+                if ('processing' === d.status) { startRunPoll(host, flowId, runId); }
+            }).catch(function (e) {
+                showError(host, e.message);
+            });
+        }
+
+        function onToggleFlow(input) {
+            var flowId = input.getAttribute('data-flow-id');
+            var enabled = input.checked;
+            // Cost transparency: enabling makes the flow's checkpoints billable checks, so it
+            // needs an explicit confirm; disabling does not.
+            if (enabled && !window.confirm(t('flowEnableConfirm'))) {
+                setToggleChecked(input, false);
+                return;
+            }
+            input.disabled = true;
+            api('flow_toggle', { site_id: siteId, flow_id: flowId, enabled: enabled ? 1 : 0 }).then(function (d) {
+                // Apply the state from the response only (no optimistic UI beyond the click).
+                setToggleChecked(input, !!d.enabled_manual);
+            }).catch(function (e) {
+                setToggleChecked(input, !enabled);
+                window.alert(e.message);
+                // Plan gate hit despite the (now invalidated) cache: re-render the gated list
+                // (toggles disabled + upsell message).
+                if (e.data && e.data.upgrade) { loadList(); }
+            }).finally(function () {
+                input.disabled = false;
+            });
+        }
+
+        root.addEventListener('click', function (e) {
+            var runBtn = e.target.closest('.wcd-flow-run-view');
+            if (runBtn) { viewRun(runBtn); return; }
+            var pageBtn = e.target.closest('.wcd-flow-runs-page');
+            if (pageBtn && !pageBtn.disabled) {
+                var flowEl = flowOf(pageBtn);
+                if (flowEl) { loadRuns(flowEl, parseInt(pageBtn.getAttribute('data-page'), 10) || 1); }
+                return;
+            }
+            // Toggle clicks must never fold the accordion row.
+            if (e.target.closest('.wcd-flow-toggle-cell')) { return; }
+            var head = e.target.closest('.wcd-flow-head');
+            if (head) { toggleFlowRow(head.closest('.wcd-flow')); }
+        });
+
+        root.addEventListener('change', function (e) {
+            if (e.target.classList && e.target.classList.contains('wcd-flow-toggle')) { onToggleFlow(e.target); }
+        });
+
+        loadList();
+    }
+
     function onReady() {
         loadBannerStats();
         initRuns();
+        initFlows();
         checkResume();
     }
 

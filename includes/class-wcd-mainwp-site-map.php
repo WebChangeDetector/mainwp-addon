@@ -97,6 +97,17 @@ class WCD_MainWP_Site_Map {
 	}
 
 	/**
+	 * The stored WCD website UUID for a site. The Interaction Flows section scopes its flow list to
+	 * this website, so it only ever shows the flows that run in MainWP-triggered checks.
+	 *
+	 * @param int $site_id MainWP site id.
+	 * @return string The website UUID, or an empty string.
+	 */
+	public static function get_website_uuid( int $site_id ): string {
+		return (string) ( self::for_site( $site_id )['website_uuid'] ?? '' );
+	}
+
+	/**
 	 * The normalized domain stored for a site.
 	 *
 	 * @param int $site_id MainWP site id.

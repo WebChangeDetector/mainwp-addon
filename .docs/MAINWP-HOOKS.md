@@ -96,6 +96,8 @@ so it is not part of the two sanctioned write-side internal calls above.
 
 ## Note: the AJAX `poll` aggregates multiple batches
 
-The unified in-card run runs all of a phase's sites at once, so `poll` accepts `batches[]` (single
-`batch` still supported) and sums the queues endpoint's `meta.status_counts_by_batch` into one
-aggregate, plus a `by_batch` breakdown for the per-site counters. No new MainWP hook is involved.
+The unified in-card run polls ALL currently interesting batches in one bundled call per tick
+(per-site pipeline), so `poll` accepts `batches[]` (single `batch` still supported) plus the
+completed `pre_batches[]`, sums the queues endpoint's `meta.status_counts_by_batch` into one
+aggregate, and returns a `by_batch` breakdown (including the pre batches' raw buckets) for the
+per-site rows. No new MainWP hook is involved.

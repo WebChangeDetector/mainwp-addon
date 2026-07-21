@@ -290,13 +290,23 @@
 .wcd-run__updsub { margin-top: 2px; font-size: 11px; color: var(--wcd-muted); }
 
 .wcd-run__sites { padding: 12px 20px 4px; display: flex; flex-direction: column; gap: 7px; }
-.wcd-run__site { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 9px; background: rgba(128, 128, 128, .06); border: 1px solid var(--wcd-border); }
+/* Per-site pipeline row: header line (mark, name, counter, phase pill) + its own mini-grid. */
+.wcd-run__site { display: flex; flex-direction: column; gap: 7px; padding: 8px 12px; border-radius: 9px; background: rgba(128, 128, 128, .06); border: 1px solid var(--wcd-border); }
+.wcd-run__siterow { display: flex; align-items: center; gap: 12px; }
 .wcd-run__sitemark { flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: var(--wcd-accent); color: #fff; font-size: 10px; font-weight: 700; }
 .wcd-run__sitename { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wcd-run__sitecount { min-width: 44px; text-align: right; font-size: 11.5px; color: var(--wcd-muted); font-variant-numeric: tabular-nums; }
 .wcd-run__sitepill { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 96px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: rgba(128, 128, 128, .18); color: var(--wcd-muted); }
+.wcd-run__sitepill.is-active { background: rgba(47, 107, 237, .16); color: var(--wcd-accent); }
 .wcd-run__sitepill.is-clean { background: rgba(31, 174, 87, .18); color: var(--wcd-green); }
 .wcd-run__sitepill.is-flagged { background: rgba(224, 161, 6, .18); color: var(--wcd-amber); }
+.wcd-run__sitepill.is-failed { background: rgba(216, 70, 60, .18); color: var(--wcd-red); }
+/* Per-site Queue/Processing/Done/Failed mini-grid (compact version of the aggregate panels). */
+.wcd-run__sitegrid { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--wcd-border); border-radius: 7px; overflow: hidden; background: rgba(128, 128, 128, .04); }
+.wcd-run__minicell { padding: 4px 6px; text-align: center; border-left: 1px solid var(--wcd-border); }
+.wcd-run__minicell:first-child { border-left: 0; }
+.wcd-run__minilbl { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); }
+.wcd-run__minival { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 .wcd-run__foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px 16px; }
 .wcd-run__footspacer { flex: 1; }
@@ -366,3 +376,44 @@
 .wcd-settings-form .ui.checkbox { margin-right: 16px; }
 .wcd-settings-advanced { margin-top: 8px; border-top: 1px solid var(--wcd-border); padding-top: 8px; }
 .wcd-settings-form textarea { font-family: monospace; font-size: 12.5px; }
+
+/* ── Interaction Flows (per-site tab, scoped to .wcd-flows) ───────────── */
+/* Layout glue only: surfaces/colors come from Fomantic + the MainWP theme (light/dark for free).
+   The accordion table mirrors the Checks tab pattern (tbody per flow, lazy body row). */
+.wcd-flows .wcd-flow-head { cursor: pointer; }
+.wcd-flows .accordion-trigger i.icon { opacity: .6; }
+/* Fomantic's stackable table forces `display` on rows at mobile widths; keep collapsed rows hidden. */
+.wcd-flows tr[hidden] { display: none !important; }
+.wcd-flows .wcd-flow-toggle-cell { cursor: default; }
+.wcd-flows .wcd-status-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.wcd-flows .wcd-col-url { white-space: normal; word-break: break-word; min-width: 14em; }
+.wcd-flows .wcd-url-link { font-weight: 600; }
+.wcd-flows .wcd-url-path { font-size: 12px; opacity: .65; word-break: break-all; }
+.wcd-flows .wcd-flow-drillin { margin: 6px 0 12px; }
+.wcd-flows .wcd-flow-subhead { margin: 8px 0 6px; }
+.wcd-flows .wcd-flow-step { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--wcd-border); }
+.wcd-flows .wcd-flow-step:last-child { border-bottom: 0; }
+.wcd-flows .wcd-flow-step-num {
+    flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(128, 128, 128, .15); font-size: 11px; font-weight: 700; color: var(--wcd-muted);
+}
+.wcd-flows .wcd-flow-step-type { min-width: 92px; text-align: center; }
+.wcd-flows .wcd-flow-step-main { flex: 1; min-width: 160px; font-size: 13px; }
+.wcd-flows .wcd-flow-step-value { padding: 1px 8px; border-radius: 6px; background: rgba(128, 128, 128, .12); font-size: 12px; font-family: monospace; }
+.wcd-flows .wcd-flow-runstep { border-bottom: 1px solid var(--wcd-border); padding-bottom: 6px; }
+.wcd-flows .wcd-flow-runstep:last-child { border-bottom: 0; }
+.wcd-flows .wcd-flow-runstep .wcd-flow-step { border-bottom: 0; padding-bottom: 2px; }
+.wcd-flows .wcd-flow-runstep-result { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 0 4px 30px; font-size: 12.5px; }
+.wcd-flows .wcd-flow-checkpoint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 0 4px 30px; }
+.wcd-flows .wcd-flow-rundetail-host { margin-top: 10px; }
+.wcd-flows .wcd-flow-rundetail-host[hidden] { display: none; }
+.wcd-flows .wcd-flow-rundetail { border: 1px solid var(--wcd-border); border-radius: 8px; padding: 10px 14px; }
+.wcd-flows .wcd-flow-rundetail-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.wcd-flows .wcd-visual-percentage { font-size: 15px; font-weight: 700; }
+.wcd-flows .wcd-visual-percentage.wcd-vc-sev-low { color: #e0a106; }
+.wcd-flows .wcd-visual-percentage.wcd-vc-sev-high { color: #d8463c; }
+
+/* Flow identity line on checkpoint comparison rows (Checks tab drill-in + flat list). */
+.wcd-flow-row-label { font-size: 12px; color: var(--wcd-muted); }
+.wcd-flow-row-label i.icon { margin-right: 3px; opacity: .7; }

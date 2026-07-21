@@ -48,6 +48,12 @@ class WCD_MainWP_API {
 		'default_mobile',
 	);
 
+	// The only flow fields the add-on may ever write. Interaction Flows are read-only in MainWP
+	// except for the On-Demand toggle: enabled_manual is what safe-update (pre/post) checks honor.
+	// enabled_monitoring is display-only here (the add-on hides monitoring settings everywhere), and
+	// name/steps must never be sent (management stays in the WebChange Detector account).
+	const FLOW_TOGGLE_FIELDS = array( 'enabled_manual' );
+
 	/**
 	 * Resolve the API base URL. Supports both override constants (WCD_API_URL and the
 	 * historical WCD_API_URL_V2 used by .wp-env.json). Trailing slash is trimmed.
@@ -519,5 +525,98 @@ class WCD_MainWP_API {
 	 */
 	public static function update_comparison( string $id, string $status, string $api_token = '' ): array {
 		return self::request( 'PUT', '/comparisons/' . rawurlencode( $id ), array( 'status' => $status ), $api_token );
+	}
+
+	/* ──────────────────────── Interaction Flows ────────────────────────── */
+
+	// Read-only + toggle-only: the add-on lists flows, shows steps/runs and flips enabled_manual.
+	// Flow writes are plan-gated server-side (403 when the plan lacks interaction_flows); callers
+	// detect the gate via the normalized 'status' (403 === $response['status']), never by matching
+	// the error message string.
+
+	/**
+	 * List the flows of one WCD website (lean shape, no steps). Always pass the website UUID: an
+	 * unfiltered call would list every flow of the account.
+	 *
+	 * @param string $website_id Website UUID the flows belong to.
+	 * @param int    $per_page   Results per page.
+	 * @param int    $page       Page number.
+	 * @param string $api_token  Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function list_flows( string $website_id, int $per_page = 100, int $page = 1, string $api_token = '' ): array {
+		return self::request(
+			'GET',
+			'/flows',
+			array(),
+			$api_token,
+			array(
+				'website_id' => $website_id,
+				'per_page'   => $per_page,
+				'page'       => $page,
+			)
+		);
+	}
+
+	/**
+	 * Get a single flow including its steps (sensitive values are redacted server-side:
+	 * value = null + value_set = true).
+	 *
+	 * @param string $flow_id   Flow UUID.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function get_flow( string $flow_id, string $api_token = '' ): array {
+		return self::request( 'GET', '/flows/' . rawurlencode( $flow_id ), array(), $api_token );
+	}
+
+	/**
+	 * Toggle a flow's lifecycle flag(s). Only the FLOW_TOGGLE_FIELDS allow-list is forwarded, so
+	 * the add-on can never write name/steps (read-only scope). The API updates only the fields
+	 * present in the request.
+	 *
+	 * @param string $flow_id   Flow UUID.
+	 * @param array  $fields    Fields to update (allow-list: self::FLOW_TOGGLE_FIELDS).
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function update_flow_toggles( string $flow_id, array $fields, string $api_token = '' ): array {
+		$body = array_intersect_key( $fields, array_flip( self::FLOW_TOGGLE_FIELDS ) );
+
+		return self::request( 'PUT', '/flows/' . rawurlencode( $flow_id ), $body, $api_token );
+	}
+
+	/**
+	 * List a flow's runs (lean shape: sc_type, device, status, batch, has_comparisons, dates).
+	 *
+	 * @param string $flow_id   Flow UUID.
+	 * @param int    $per_page  Results per page.
+	 * @param int    $page      Page number.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function list_flow_runs( string $flow_id, int $per_page = 10, int $page = 1, string $api_token = '' ): array {
+		return self::request(
+			'GET',
+			'/flows/' . rawurlencode( $flow_id ) . '/runs',
+			array(),
+			$api_token,
+			array(
+				'per_page' => $per_page,
+				'page'     => $page,
+			)
+		);
+	}
+
+	/**
+	 * Get one flow run with its per-step results (assertions, checkpoint screenshots/comparisons).
+	 * This is also the polling endpoint while a run is still processing.
+	 *
+	 * @param string $run_id    Flow run UUID.
+	 * @param string $api_token Bearer token; falls back to the stored token.
+	 * @return array Normalized API result.
+	 */
+	public static function get_flow_run( string $run_id, string $api_token = '' ): array {
+		return self::request( 'GET', '/flow-runs/' . rawurlencode( $run_id ), array(), $api_token );
 	}
 }

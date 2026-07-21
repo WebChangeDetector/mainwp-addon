@@ -333,13 +333,23 @@ class WCD_MainWP_Update_Flow {
 	/* ───────────────────────── Run state (resume) ──────────────────────── */
 
 	// The browser orchestrates the safe-update run, so navigating away (or a closed tab) would
-	// otherwise lose the remaining phases. Every phase transition is therefore persisted
+	// otherwise lose the remaining pipeline steps. Every per-site transition is therefore persisted
 	// dashboard-side (network-aware option): the AJAX endpoints record pre batches, completed
 	// updates and post batches as they happen, and the driving tab sends a short heartbeat. When a
 	// page next loads with a still-active run whose heartbeat has gone silent (RESUME_AFTER), it
-	// automatically reopens the run popup and continues at the persisted phase.
+	// derives each site's state from the persisted fields and continues the run.
+	//
+	// Two options, one writer each:
+	// RUN_STATE_KEY holds the STRUCTURAL state (sites, batches, updated sites). It is only
+	// written by the JS-serialized mutating endpoints (the JS funnels take_pre / run_update /
+	// take_post / run_resume_post through one promise lane), so a concurrent read-modify-write
+	// can never drop a recorded batch.
+	// ACTIVITY_KEY holds the liveness signal ({ last_activity, driver }). heartbeat() and
+	// touch_run() write ONLY this option, so the frequent activity bumps can never clobber a
+	// structural record.
 
 	const RUN_STATE_KEY   = 'wcd_mainwp_active_run';
+	const ACTIVITY_KEY    = 'wcd_mainwp_run_activity';
 	const RUN_STALE_AFTER = 600; // Seconds idle before an empty (nothing-happened) run is dropped as leftover.
 	const RESUME_AFTER    = 20;  // Seconds without a heartbeat before another page may take over the run.
 
@@ -363,6 +373,10 @@ class WCD_MainWP_Update_Flow {
 	 * @return void
 	 */
 	public static function start_run( array $sites, string $driver = '' ): void {
+		// A fresh run must not inherit a previous run's activity stamp: drop it and let
+		// idle_seconds() fall back to the structural last_activity written right below (the
+		// driving tab's first heartbeat re-creates the activity option immediately).
+		WCD_MainWP_Options::delete( self::ACTIVITY_KEY );
 		self::save_run(
 			array(
 				'started_at'    => time(),
@@ -378,25 +392,41 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
-	 * Stop tracking the current run.
+	 * Stop tracking the current run (structural state AND activity).
 	 *
 	 * @return void
 	 */
 	public static function clear_run(): void {
 		WCD_MainWP_Options::delete( self::RUN_STATE_KEY );
+		WCD_MainWP_Options::delete( self::ACTIVITY_KEY );
+	}
+
+	/**
+	 * The run's activity option ({ last_activity, driver }), or an empty array.
+	 *
+	 * @return array
+	 */
+	public static function activity(): array {
+		$activity = WCD_MainWP_Options::get( self::ACTIVITY_KEY, array() );
+
+		return is_array( $activity ) ? $activity : array();
 	}
 
 	/**
 	 * Bump the run's activity timestamp (called from the polling endpoint while a run is driven).
+	 * Writes ONLY the activity option, never the structural run state.
 	 *
 	 * @return void
 	 */
 	public static function touch_run(): void {
-		$state = self::run_state();
+		if ( empty( self::run_state() ) ) {
+			return;
+		}
+		$activity = self::activity();
 		// Throttled: poll ticks every ~3s; one option write per 30s keeps the timestamp fresh
 		// enough for the staleness gate.
-		if ( $state && ( time() - (int) ( $state['last_activity'] ?? 0 ) ) > 30 ) {
-			self::save_run( $state );
+		if ( ( time() - (int) ( $activity['last_activity'] ?? 0 ) ) > 30 ) {
+			self::save_activity( $activity );
 		}
 	}
 
@@ -404,28 +434,37 @@ class WCD_MainWP_Update_Flow {
 	 * Stamp the run as active right now (the driving tab's heartbeat). Unthrottled: a fresh stamp is
 	 * what tells another page that this run is still being driven, so it must never be skipped. Also
 	 * records the driver id so a same-tab reload can recognise its own run and reclaim it instantly.
+	 * Writes ONLY the activity option, so it can never clobber a concurrent structural record.
 	 *
 	 * @param string $driver Opaque id of the tab sending the heartbeat (becomes the current driver).
 	 * @return void
 	 */
 	public static function heartbeat( string $driver = '' ): void {
-		$state = self::run_state();
-		if ( $state ) {
-			if ( '' !== $driver ) {
-				$state['driver'] = $driver;
-			}
-			self::save_run( $state );
+		if ( empty( self::run_state() ) ) {
+			return;
 		}
+		$activity = self::activity();
+		if ( '' !== $driver ) {
+			$activity['driver'] = $driver;
+		}
+		self::save_activity( $activity );
 	}
 
 	/**
-	 * Seconds since the run last showed activity (heartbeat / phase write).
+	 * Seconds since the run last showed activity. Prefers the activity option (written by
+	 * heartbeat/touch_run); falls back to the structural state's last_activity for a run that
+	 * started before the activity split (legacy in-flight run) or whose first heartbeat is
+	 * still on the wire.
 	 *
 	 * @param array $state Run state (from run_state()).
 	 * @return int
 	 */
 	public static function idle_seconds( array $state ): int {
-		$last = isset( $state['last_activity'] ) ? (int) $state['last_activity'] : 0;
+		$activity = self::activity();
+		$last     = (int) ( $activity['last_activity'] ?? 0 );
+		if ( 0 === $last ) {
+			$last = isset( $state['last_activity'] ) ? (int) $state['last_activity'] : 0;
+		}
 
 		return max( 0, time() - $last );
 	}
@@ -489,13 +528,24 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
-	 * Persist the run state with a fresh activity timestamp.
+	 * Persist the structural run state. Deliberately does NOT touch last_activity: liveness lives
+	 * in the separate activity option (see the section comment), written only by heartbeat/touch_run.
 	 *
 	 * @param array $state Run state to save.
 	 * @return void
 	 */
 	protected static function save_run( array $state ): void {
-		$state['last_activity'] = time();
 		WCD_MainWP_Options::set( self::RUN_STATE_KEY, $state );
+	}
+
+	/**
+	 * Persist the activity option with a fresh timestamp.
+	 *
+	 * @param array $activity Activity payload ({ last_activity, driver }).
+	 * @return void
+	 */
+	protected static function save_activity( array $activity ): void {
+		$activity['last_activity'] = time();
+		WCD_MainWP_Options::set( self::ACTIVITY_KEY, $activity );
 	}
 }

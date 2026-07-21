@@ -417,6 +417,14 @@ class WCD_MainWP_Runs_View {
 		$ai      = ( ! empty( $c['ai_verification_result']['summary'] ) && is_string( $c['ai_verification_result']['summary'] ) )
 			? $c['ai_verification_result']['summary']
 			: '';
+		// Flow checkpoint comparisons carry the flow identity (additive API fields, null on regular
+		// rows): show "flow name : checkpoint label" so several checkpoints of one start URL stay
+		// distinguishable in the drill-in. Markup-only addition; no key or shape changes.
+		$flow_label = '';
+		if ( ! empty( $c['flow_checkpoint_label'] ) && is_string( $c['flow_checkpoint_label'] ) ) {
+			$flow_name  = ( ! empty( $c['flow_name'] ) && is_string( $c['flow_name'] ) ) ? $c['flow_name'] : __( 'Flow', 'webchangedetector-for-mainwp' );
+			$flow_label = $flow_name . ' : ' . $c['flow_checkpoint_label'];
+		}
 		// Presentation-only colour hint (low/high). NOT the per-group "above threshold" decision,
 		// which the API owns; this just tints the percentage.
 		$sev = $percent <= 0 ? '' : ( $percent < 5 ? 'wcd-vc-sev-low' : 'wcd-vc-sev-high' );
@@ -429,6 +437,9 @@ class WCD_MainWP_Runs_View {
 			<td class="wcd-col-url">
 				<span class="<?php echo esc_attr( self::device_icon_class( $device ) ); ?>"></span>
 				<span class="wcd-url-link"><?php echo esc_html( $title ? $title : $url ); ?></span>
+				<?php if ( '' !== $flow_label ) : ?>
+					<div class="wcd-flow-row-label"><i class="route icon"></i><?php echo esc_html( $flow_label ); ?></div>
+				<?php endif; ?>
 				<?php
 				if ( $url ) :
 					?>
@@ -556,12 +567,13 @@ class WCD_MainWP_Runs_View {
 	}
 
 	/**
-	 * Format a difference percentage for display.
+	 * Format a difference percentage for display. Public: the Interaction Flows renderer reuses it
+	 * so percentages read identically everywhere.
 	 *
 	 * @param mixed $percent Difference percentage value.
 	 * @return string Formatted percentage (e.g. "1.23" or "< 0.01").
 	 */
-	protected static function format_percent( $percent ): string {
+	public static function format_percent( $percent ): string {
 		$percent = (float) $percent;
 		if ( $percent > 0 && $percent < 0.005 ) {
 			return '< 0.01';
@@ -571,12 +583,13 @@ class WCD_MainWP_Runs_View {
 	}
 
 	/**
-	 * Human-readable "x ago" label for a datetime string.
+	 * Human-readable "x ago" label for a datetime string. Public: reused by the Interaction Flows
+	 * renderer.
 	 *
 	 * @param string $datetime Datetime string parseable by strtotime().
 	 * @return string Relative time label, or empty string when unparseable.
 	 */
-	protected static function time_ago( string $datetime ): string {
+	public static function time_ago( string $datetime ): string {
 		$ts = strtotime( $datetime );
 		if ( ! $ts ) {
 			return '';
@@ -587,12 +600,13 @@ class WCD_MainWP_Runs_View {
 	}
 
 	/**
-	 * Localized short date/time label for a datetime string.
+	 * Localized short date/time label for a datetime string. Public: reused by the Interaction
+	 * Flows renderer.
 	 *
 	 * @param string $datetime Datetime string parseable by strtotime().
 	 * @return string Formatted date, or empty string when unparseable.
 	 */
-	protected static function short_date( string $datetime ): string {
+	public static function short_date( string $datetime ): string {
 		$ts = strtotime( $datetime );
 
 		// wp_date converts the API's UTC timestamp into the dashboard's configured timezone.

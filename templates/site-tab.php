@@ -64,6 +64,17 @@ $wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 	<?php endif; ?>
 </div>
 
+<?php if ( '' !== $wcd_mainwp_token && $wcd_mainwp_enabled ) : ?>
+	<?php // Interaction Flows: read-only list + On-Demand toggle, scoped to this site's mapped WCD website. Content lazy-loads via the flow_list AJAX action (one request per tab view). ?>
+	<div class="ui segment wcd-flows">
+		<h3 class="ui header"><?php esc_html_e( 'Interaction Flows', 'webchangedetector-for-mainwp' ); ?></h3>
+		<p class="wcd-muted"><?php esc_html_e( 'Flows recorded with the WebChange Detector browser extension for this site. Enabled flows run their checkpoints as checks with every On-Demand Check and safe update, and count against your plan. Manage and edit flows in your WebChange Detector account.', 'webchangedetector-for-mainwp' ); ?></p>
+		<div id="wcd-flows-section" data-site-id="<?php echo esc_attr( (string) $wcd_mainwp_site_id ); ?>">
+			<div class="wcd-runs-loading"><div class="ui active inline loader"></div></div>
+		</div>
+	</div>
+<?php endif; ?>
+
 <?php // The unified in-card run renders here (this tab's safe-update button has no hero banner). ?>
 <div class="wcd-run-host"></div>
 
