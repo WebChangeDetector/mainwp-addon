@@ -78,7 +78,7 @@
 .wcd-url-pagegap { color: var(--wcd-muted); font-size: 12px; }
 .wcd-url-pageinfo { margin-left: auto; font-size: 12.5px; color: var(--wcd-muted); font-variant-numeric: tabular-nums; }
 
-/* ── Hero entry banner (Operations dashboard + child-site overview) ─────── */
+/* ── Hero setup hint (no API token yet; templates/entry-banner-no-token.php) ── */
 .wcd-hero {
     display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
     margin: 0 0 1.5em; padding: 20px 24px;
@@ -90,8 +90,7 @@
     display: flex; align-items: center; justify-content: center;
     background: #3b5bdb; font-size: 22px; color: #fff;
 }
-.wcd-hero__icon i.icon,
-.wcd-hero__cta i.icon { margin: 0; }
+.wcd-hero__icon i.icon { margin: 0; }
 .wcd-hero__body { flex: 1; min-width: 240px; }
 .wcd-hero__badge {
     display: inline-block; margin-bottom: 9px; padding: 3px 10px; border-radius: 999px;
@@ -101,31 +100,22 @@
 .wcd-hero__desc { margin-top: 5px; font-size: 13.5px; line-height: 1.45; color: rgba(255, 255, 255, .72); max-width: 64ch; }
 .wcd-hero__desc a { color: #aebfff; text-decoration: underline; }
 .wcd-hero__desc a:hover { color: #fff; }
-.wcd-hero__stats { display: flex; gap: 28px; }
-.wcd-hero__stat { text-align: center; }
-/* nowrap: the Sites stat can render a split like "5 / 12". */
-.wcd-hero__num { font-size: 26px; font-weight: 700; line-height: 1; color: #fff; white-space: nowrap; }
-.wcd-hero__lbl { margin-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: rgba(255, 255, 255, .6); }
-.wcd-hero__cta {
-    flex-shrink: 0; cursor: pointer; border: 0; border-radius: 9px; padding: 13px 22px;
-    display: inline-flex; align-items: center; gap: 8px;
-    font-size: 14px; font-weight: 700; color: #fff; background: #3b5bdb;
-    transition: background .15s, transform .05s;
-}
-.wcd-hero__cta:hover { background: #2f49b8; color: #fff; }
-.wcd-hero__cta:active { transform: translateY(1px); }
-.wcd-hero__cta.is-disabled,
-.wcd-hero__cta:disabled { background: rgba(255, 255, 255, .14); color: rgba(255, 255, 255, .5); cursor: not-allowed; }
-.wcd-hero__cta.is-disabled:hover,
-.wcd-hero__cta:disabled:hover { background: rgba(255, 255, 255, .14); transform: none; }
-@media (max-width: 900px) {
-    .wcd-hero__stats { order: 3; width: 100%; justify-content: flex-start; }
-    .wcd-hero__cta { order: 4; width: 100%; justify-content: center; }
-}
 
-/* ── Safe-update run host (shared by the widget, banner and per-site tab) ─ */
+/* ── Safe-update bar: global Updates page (mainwp-actions-bar frame) + inline variant on the
+   individual site's Updates subpage (rendered into a native actions-bar column). Native classes
+   supply the chrome; this is layout glue. ── */
+.wcd-updates-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.wcd-updates-bar__label { display: inline-flex; align-items: center; gap: 8px; }
+/* Tab-dependent visibility on the site subpage uses the native `hidden` class convention; WP
+   core's bare `.hidden` rule loses the specificity race against Fomantic's `.ui.button`
+   display, so pin it for our two buttons. */
+.wcd-updates-bar .wcd-updates-run.hidden { display: none; }
+
+#mainwp-manage-updates .mainwp-actions-bar.wcd-updates-bar { margin-left: 0 !important; margin-right: 0 !important; margin-top: 0 !important; }
+
+/* ── Safe-update run host (shared by the widget, updates bar and per-site tab) ─ */
 /* The surfaces use native chrome (the widget puts the run host inside its flex-grow
-   mainwp-scrolly-overflow so the footer stays pinned; the banner/tab render it after their content),
+   mainwp-scrolly-overflow so the footer stays pinned; the bar/tab render it after their content),
    so the host only needs to collapse until a run renders into it, plus a little top spacing. */
 .wcd-run-host:empty { display: none; }
 .wcd-run-host { margin-top: 12px; }
@@ -177,7 +167,7 @@
 .wcd-reopen.is-ok { background: rgba(31, 174, 87, .15); color: var(--wcd-green); }
 .wcd-reopen.is-flagged { background: rgba(224, 161, 6, .15); color: var(--wcd-amber); }
 .wcd-reopen.is-failed { background: rgba(216, 70, 60, .15); color: var(--wcd-red); }
-/* On the Updates banner there is no header slot, so the button falls back into the run-host below. */
+/* On the Updates bar and per-site tab there is no header slot, so the button falls back into the run-host below. */
 .wcd-run-host .wcd-reopen-wrap { margin-top: 4px; }
 
 /* ── Preflight (confirm-only) modal content ────────────────────────────── */

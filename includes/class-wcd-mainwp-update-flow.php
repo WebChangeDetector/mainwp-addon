@@ -50,13 +50,21 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
-	 * Trigger all available updates for one site, synchronously. Suppresses the after-update
-	 * hooks for the duration so we do not double-fire post screenshots.
+	 * Trigger updates for one site, synchronously. Suppresses the after-update hooks for the
+	 * duration so we do not double-fire post screenshots.
 	 *
-	 * @param int $site_id MainWP site id.
+	 * Without an update type, all four update types run (the legacy whole-site behavior of the
+	 * widget, Run tab and per-site tab). With a type, only the matching abilities method runs;
+	 * for plugins/themes/translations the optional slugs scope it to specific items (empty slugs
+	 * = all of this type, the abilities' own semantics, so the key is omitted then). Core never
+	 * takes slugs. Same guards as before; no new internal MainWP call.
+	 *
+	 * @param int    $site_id     MainWP site id.
+	 * @param string $update_type Optional type scope: core|plugins|themes|translations ('' = all).
+	 * @param array  $slugs       Optional item slugs (raw upgrade-column keys) for non-core types.
 	 * @return array Result with ok, updated, offline and error keys.
 	 */
-	public static function trigger_site_update( int $site_id ): array {
+	public static function trigger_site_update( int $site_id, string $update_type = '', array $slugs = array() ): array {
 		if ( ! self::can_trigger_updates() ) {
 			return array(
 				'ok'      => false,
@@ -66,20 +74,34 @@ class WCD_MainWP_Update_Flow {
 			);
 		}
 
+		$methods = array(
+			'core'         => 'execute_update_site_core',
+			'plugins'      => 'execute_update_site_plugins',
+			'themes'       => 'execute_update_site_themes',
+			'translations' => 'execute_update_site_translations',
+		);
+		if ( '' !== $update_type ) {
+			$methods = array_intersect_key( $methods, array( $update_type => true ) );
+			// A typed call whose single abilities method is missing must degrade to a clear
+			// error, never a silent ok/no-op (REVIEW.md: guarded internal calls degrade to a
+			// notice). The legacy untyped loop keeps skipping missing methods per type instead.
+			if ( ! isset( $methods[ $update_type ] ) || ! method_exists( self::ABILITIES_CLASS, $methods[ $update_type ] ) ) {
+				return array(
+					'ok'      => false,
+					'updated' => 0,
+					'offline' => false,
+					'error'   => __( 'MainWP update API is unavailable. Run the native update instead.', 'webchangedetector-for-mainwp' ),
+				);
+			}
+		}
+
 		self::$suppress = true;
 		$updated        = 0;
 		$offline        = false;
 		$errors         = array();
 
-		$methods = array(
-			'execute_update_site_core',
-			'execute_update_site_plugins',
-			'execute_update_site_themes',
-			'execute_update_site_translations',
-		);
-
 		try {
-			foreach ( $methods as $method ) {
+			foreach ( $methods as $type => $method ) {
 				if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
 					continue;
 				}
@@ -88,7 +110,14 @@ class WCD_MainWP_Update_Flow {
 				// run from looking abandoned to another tab in the meantime.
 				self::touch_run();
 
-				$result = call_user_func( array( self::ABILITIES_CLASS, $method ), array( 'site_id_or_domain' => $site_id ) );
+				$input = array( 'site_id_or_domain' => $site_id );
+				// Slugs only apply on an explicitly typed (Updates-page) call: the legacy all-types
+				// loop must never scope three types to one type's slugs.
+				if ( '' !== $update_type && 'core' !== $type && ! empty( $slugs ) ) {
+					$input['slugs'] = $slugs;
+				}
+
+				$result = call_user_func( array( self::ABILITIES_CLASS, $method ), $input );
 
 				if ( is_wp_error( $result ) ) {
 					$code = $result->get_error_code();
@@ -291,7 +320,7 @@ class WCD_MainWP_Update_Flow {
 	 * WordPress core (0/1) + plugins + themes + translations.
 	 *
 	 * @param object $website MainWP website row.
-	 * @return array List of update item arrays (kind, name, version).
+	 * @return array List of update item arrays (kind, slug, name, version).
 	 */
 	protected static function items_from_website( $website ): array {
 		$items = array();
@@ -300,6 +329,7 @@ class WCD_MainWP_Update_Flow {
 		if ( is_array( $core ) && ! empty( $core ) ) {
 			$items[] = array(
 				'kind'    => 'core',
+				'slug'    => '',
 				'name'    => 'WordPress',
 				'version' => (string) ( $core['new'] ?? ( $core['new_version'] ?? '' ) ),
 			);
@@ -321,6 +351,10 @@ class WCD_MainWP_Update_Flow {
 				$update  = isset( $entry['update'] ) && is_array( $entry['update'] ) ? $entry['update'] : array();
 				$items[] = array(
 					'kind'    => $kind,
+					// The raw column key for plugins/themes (the same key the abilities' slugs
+					// filter matches); translations carry their slug inside the entry (their
+					// column is a plain list, so the key is just a numeric index).
+					'slug'    => 'translation' === $kind ? (string) ( $entry['slug'] ?? '' ) : (string) $slug,
 					'name'    => (string) ( $entry['Name'] ?? ( $entry['name'] ?? ( is_string( $slug ) ? $slug : '' ) ) ),
 					'version' => (string) ( $update['new_version'] ?? ( $entry['new_version'] ?? ( $entry['version'] ?? '' ) ) ),
 				);
@@ -346,7 +380,8 @@ class WCD_MainWP_Update_Flow {
 	/**
 	 * The persisted state of the current safe-update run, or an empty array.
 	 *
-	 * @return array Run state (started_at, last_activity, phase, sites, pre_batches, updated_sites, post_batches).
+	 * @return array Run state (started_at, last_activity, phase, sites, update_type, site_slugs,
+	 *               pre_batches, updated_sites, post_batches).
 	 */
 	public static function run_state(): array {
 		$state = WCD_MainWP_Options::get( self::RUN_STATE_KEY, array() );
@@ -357,12 +392,15 @@ class WCD_MainWP_Update_Flow {
 	/**
 	 * Start tracking a new run (replaces any previous state).
 	 *
-	 * @param array  $sites  Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
-	 * @param string $driver Opaque id of the tab driving the run (so it can reclaim it instantly after
-	 *                       a same-tab reload/navigation, without waiting out the two-tab guard).
+	 * @param array  $sites       Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 * @param string $driver      Opaque id of the tab driving the run (so it can reclaim it instantly
+	 *                            after a same-tab reload/navigation, without waiting out the two-tab guard).
+	 * @param string $update_type Optional type scope of an Updates-page run ('' = legacy whole-site run).
+	 * @param array  $site_slugs  Optional per-site item slugs: [ site_id => string[] ] (empty list =
+	 *                            all items of the type). Only kept for tracked sites.
 	 * @return void
 	 */
-	public static function start_run( array $sites, string $driver = '' ): void {
+	public static function start_run( array $sites, string $driver = '', string $update_type = '', array $site_slugs = array() ): void {
 		self::save_run(
 			array(
 				'started_at'    => time(),
@@ -370,6 +408,10 @@ class WCD_MainWP_Update_Flow {
 				'phase'         => 'pre',
 				'driver'        => $driver,
 				'sites'         => $sites,
+				// Scoped (Updates-page) runs persist their type + per-site slugs so a resume
+				// re-applies the original selection and never installs more than the user picked.
+				'update_type'   => $update_type,
+				'site_slugs'    => array_intersect_key( $site_slugs, $sites ),
 				'pre_batches'   => array(),
 				'updated_sites' => array(),
 				'post_batches'  => array(),

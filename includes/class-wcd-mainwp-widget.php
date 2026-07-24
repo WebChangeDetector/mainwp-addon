@@ -12,7 +12,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders the MainWP Safe Update widget (dashboard metabox + Visual Checks "Run" tab panel).
+ * Renders the MainWP "WebChange Detector: Updates" widget (dashboard metabox + Visual Checks "Run" tab panel).
  */
 class WCD_MainWP_Widget {
 
@@ -60,7 +60,7 @@ class WCD_MainWP_Widget {
 	}
 
 	/**
-	 * Render the widget heading band (Safe Updates title + sub header).
+	 * Render the widget heading band ("WCD Updates" title + sub header).
 	 *
 	 * Shared by the activated widget body (templates/widget-safe-update.php) and the not-activated
 	 * notice below, so the WCD branding/wording stays in one place. The activated body also needs the
@@ -73,7 +73,7 @@ class WCD_MainWP_Widget {
 		?>
 		<div class="mainwp-widget-header wcd-widget-header">
 			<h2 class="ui header handle-drag">
-				<?php esc_html_e( 'Safe Updates with WebChange Detector', 'webchangedetector-for-mainwp' ); ?>
+				<?php esc_html_e( 'WCD Updates', 'webchangedetector-for-mainwp' ); ?>
 				<div class="sub header"><?php esc_html_e( 'Capture before/after screenshots around your updates, then compare.', 'webchangedetector-for-mainwp' ); ?></div>
 			</h2>
 			<?php if ( $with_reopen_slot ) : ?>
@@ -100,7 +100,7 @@ class WCD_MainWP_Widget {
 		$settings_url = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 		$message      = $site_id > 0
 			/* translators: %s: Visual Checks Settings tab URL. */
-			? __( 'This site is not activated for visual checks yet. Activate it in <a href="%s">Settings</a> to use it in Safe Updates.', 'webchangedetector-for-mainwp' )
+			? __( 'This site is not activated for visual checks yet. Activate it in <a href="%s">Settings</a> to use it in WCD Updates.', 'webchangedetector-for-mainwp' )
 			/* translators: %s: Visual Checks Settings tab URL. */
 			: __( 'No websites activated yet. Activate a website in <a href="%s">Settings</a> to run visual checks.', 'webchangedetector-for-mainwp' );
 

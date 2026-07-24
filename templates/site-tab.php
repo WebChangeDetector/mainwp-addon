@@ -53,9 +53,9 @@ $wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 		$wcd_mainwp_updates_count = WCD_MainWP_Update_Flow::pending_updates_count( array( $wcd_mainwp_site_id ) );
 		$wcd_mainwp_no_updates    = ( null !== $wcd_mainwp_updates_count && 0 === (int) $wcd_mainwp_updates_count );
 		?>
-		<p class="wcd-muted"><?php esc_html_e( 'Run a safe update for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector-for-mainwp' ); ?></p>
+		<p class="wcd-muted"><?php esc_html_e( 'Run WCD Updates for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector-for-mainwp' ); ?></p>
 		<button type="button" class="ui green button wcd-safe-update<?php echo $wcd_mainwp_no_updates ? ' disabled' : ''; ?>" data-scope="site" data-site-id="<?php echo esc_attr( (string) $wcd_mainwp_site_id ); ?>" <?php disabled( $wcd_mainwp_no_updates ); ?>>
-			<i class="eye icon"></i> <?php esc_html_e( 'On-Demand Safe Update', 'webchangedetector-for-mainwp' ); ?>
+			<i class="eye icon"></i> <?php esc_html_e( 'Update with Checks', 'webchangedetector-for-mainwp' ); ?>
 		</button>
 		<a href="<?php echo esc_url( $wcd_mainwp_settings ); ?>" class="ui button"><?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?></a>
 		<?php if ( $wcd_mainwp_no_updates ) : ?>

@@ -29,6 +29,16 @@
             var v = data[k];
             if (Array.isArray(v)) {
                 v.forEach(function (item) { body.append(k + '[]', item); });
+            } else if (v !== null && typeof v === 'object') {
+                // One nesting level for maps of lists (the Updates-page selection map):
+                // key[<sub>][]=item, which PHP parses natively. An empty list still appends one
+                // empty item so the sub-key survives the round trip (core rows have no slugs;
+                // the server drops empty slug entries but keeps the site key).
+                Object.keys(v).forEach(function (sub) {
+                    var list = Array.isArray(v[sub]) ? v[sub] : [];
+                    if (!list.length) { body.append(k + '[' + sub + '][]', ''); return; }
+                    list.forEach(function (item) { body.append(k + '[' + sub + '][]', item); });
+                });
             } else if (v !== undefined && v !== null) {
                 body.set(k, v);
             }
@@ -776,20 +786,103 @@
     // Entry is our own "Run visual check & update" button, so the run is always WITH WebChange
     // Detector (no with/without decision step). The button goes straight to the preflight.
 
-    function preflightArgs(scope, siteId) {
-        return scope === 'site' && siteId ? { site_id: siteId } : {};
+    // updatesScope (optional) carries the Updates-page bar's scoping: { update_type, mode,
+    // selection }. mode 'all' sends only the type (the server derives sites + items from the
+    // pending-update columns); 'selected' sends the checkbox selection map.
+    function preflightArgs(scope, siteId, updatesScope) {
+        var args = scope === 'site' && siteId ? { site_id: siteId } : {};
+        if (updatesScope && updatesScope.update_type) {
+            args.update_type = updatesScope.update_type;
+            if ('all' === updatesScope.mode) { args.mode = 'all'; }
+            else if (updatesScope.selection) { args.selection = updatesScope.selection; }
+        }
+        return args;
     }
 
-    // Locate the in-card run host that belongs to the clicked trigger. The Updates-page banner
-    // (entry-banner.php) renders the .wcd-run-host right after its .wcd-hero; the dashboard widget
-    // (widget-safe-update.php) has no .wcd-hero, so we fall back to the page's single .wcd-run-host
-    // (at most one entry point renders per page).
-    function runHostFor(trigger) {
-        var hero = trigger && trigger.closest ? trigger.closest('.wcd-hero') : null;
-        if (hero && hero.nextElementSibling && hero.nextElementSibling.classList.contains('wcd-run-host')) {
-            return hero.nextElementSibling;
-        }
+    // Locate the in-card run host (the reopen-button fallback slot). Overview pages can host
+    // more than one (our own widget + the WCD Updates card in MainWP's native Updates Overview
+    // widget); all hosts are equivalent fallbacks, the first one in the DOM wins.
+    function runHostFor() {
         return document.querySelector('.wcd-run-host');
+    }
+
+    /* ── Updates-page selection reader (Update Selected with Checks) ──────── */
+    // MainWP marks each selectable update row with updated="0" and a `.child.checkbox`; the site id
+    // and the item slug live on the row itself or an ancestor (tr/tbody), which covers all three
+    // view modes (Per Site / Per Group / Per Item) via closest(). plugin_slug/theme_slug are
+    // rawurlencode()d by MainWP, so they MUST be decoded or the server-side slug filter matches
+    // nothing; translation_slug is plain. Core rows carry no slug (site-level selection).
+
+    var UPDATES_SLUG_ATTRS = { plugins: 'plugin_slug', themes: 'theme_slug', translations: 'translation_slug' };
+    var UPDATES_SLUG_ENCODED = { plugins: true, themes: true, translations: false };
+
+    // Site Updates subpage: native tab name (data-tab) -> our update type. Tabs we cannot
+    // safe-update (abandoned plugins/themes, database updates) are absent on purpose.
+    var SITE_TAB_TYPES = { wordpress: 'core', plugins: 'plugins', themes: 'themes', translations: 'translations' };
+
+    // Returns the selection map { siteId: [slugs] } for one update type. Scope: the explicit
+    // `root` element when given (site subpage: the ACTIVE tab, since all type tables are in the
+    // DOM at once there), else the bar's enclosing tab (global Updates page: exactly one tab
+    // renders per pageload). Duplicate rows (Per Group repeats a site's rows per group) are
+    // deduped per site.
+    function readUpdatesSelection(bar, updateType, root) {
+        var tab = root || (bar && bar.closest && bar.closest('.ui.tab')) || document;
+        var attr = UPDATES_SLUG_ATTRS[updateType] || '';
+        var sites = {};
+        tab.querySelectorAll('tr[updated="0"]').forEach(function (row) {
+            var box = row.querySelector('.child.checkbox input[type="checkbox"]');
+            if (!box || !box.checked) { return; }
+            var siteEl = row.closest('[site_id]');
+            var siteId = siteEl ? parseInt(siteEl.getAttribute('site_id'), 10) : 0;
+            if (!siteId) { return; }
+            if (!attr) {
+                // core: the site itself is the selection (no slugs).
+                if (!sites[siteId]) { sites[siteId] = []; }
+                return;
+            }
+            var slugEl = row.closest('[' + attr + ']');
+            var slug = slugEl ? (slugEl.getAttribute(attr) || '') : '';
+            if (UPDATES_SLUG_ENCODED[updateType]) {
+                try { slug = decodeURIComponent(slug); } catch (e) { /* keep the raw value */ }
+            }
+            // Only a resolved slug may create the site's bucket: an empty slugs list would mean
+            // "all items of this type" server-side, silently escalating the selection.
+            if (!slug) { return; }
+            if (!sites[siteId]) { sites[siteId] = []; }
+            if (sites[siteId].indexOf(slug) === -1) { sites[siteId].push(slug); }
+        });
+        return sites;
+    }
+
+    // Site Updates subpage only (the inline bar marker exists there): keep the bar's buttons in
+    // sync with the native client-side tab switcher. "Update Selected with Checks" only where a
+    // checkbox table exists (plugins/themes; core and translations have none on this subpage,
+    // matching the native Selected buttons), both hidden on tabs we cannot safe-update
+    // (abandoned plugins/themes, database updates). Uses the `hidden` class like the native
+    // buttons (a small own CSS rule makes it stick against Fomantic's .ui.button display).
+    function initSiteUpdatesBar() {
+        var bar = document.querySelector('.wcd-updates-bar--inline');
+        if (!bar) { return; }
+        var selectedBtn = bar.querySelector('.wcd-updates-run[data-mode="selected"]');
+        var allBtn = bar.querySelector('.wcd-updates-run[data-mode="all"]');
+
+        function applyTab(tabName) {
+            var type = SITE_TAB_TYPES[tabName] || '';
+            var hasCheckboxes = 'plugins' === tabName || 'themes' === tabName;
+            if (selectedBtn) { selectedBtn.classList.toggle('hidden', !hasCheckboxes); }
+            if (allBtn) { allBtn.classList.toggle('hidden', !type); }
+        }
+
+        // The native switcher is a Fomantic dropdown whose items carry data-tab; delegate so the
+        // toggle also works after Fomantic re-renders the menu.
+        document.addEventListener('click', function (e) {
+            var item = e.target.closest && e.target.closest('.select-individual-updates .item');
+            if (item) { applyTab(item.getAttribute('data-tab') || ''); }
+        });
+
+        var active = document.querySelector('.select-individual-updates .item.active')
+            || document.querySelector('.ui.tab.active[data-tab]');
+        applyTab(active ? (active.getAttribute('data-tab') || '') : '');
     }
 
     function plural(n, one, many) { return 1 === n ? one : many; }
@@ -805,15 +898,15 @@
 
     // Confirm-only preflight: a summary strip, credit coverage, an expandable update list and the
     // per-site URL list. On confirm the modal closes and the run plays out in the in-card host.
-    function runPreflight(trigger, scope, siteId) {
-        var host  = runHostFor(trigger);
+    function runPreflight(trigger, scope, siteId, updatesScope) {
+        var host  = runHostFor();
         var modal = openModal();
         modalHead(modal, t('preflightTitle'));
         var body = el('div', { class: 'scrolling content' });
         body.appendChild(el('div', { class: 'ui active inline loader' }));
         modal.appendChild(body);
 
-        api('preflight', preflightArgs(scope, siteId)).then(function (data) {
+        api('preflight', preflightArgs(scope, siteId, updatesScope)).then(function (data) {
             body.innerHTML = '';
             var sites = data.sites || [];
             // Only sites with pending updates participate in the run; a missing flag (older
@@ -828,7 +921,7 @@
                 body.appendChild(el('p', { class: 'wcd-muted', text: t('noSites') }));
                 return;
             }
-            buildPreflight(modal, body, data, checkSites, runSites, sites, host, trigger);
+            buildPreflight(modal, body, data, checkSites, runSites, sites, host, trigger, updatesScope);
         }).catch(function (e) {
             body.innerHTML = '';
             body.appendChild(el('p', { class: 'wcd-error', text: e.message }));
@@ -848,7 +941,8 @@
 
     // runSites = sites with pending updates (the run set); allSites additionally holds the
     // skipped sites without updates, rendered greyed out for transparency (display only).
-    function buildPreflight(modal, body, data, checkSites, runSites, allSites, host, trigger) {
+    // updatesScope (optional) is the Updates-page bar scoping, handed on to the run.
+    function buildPreflight(modal, body, data, checkSites, runSites, allSites, host, trigger, updatesScope) {
         body.appendChild(el('p', { class: 'wcd-pf-lead', text: t('preflightLead') }));
 
         // summary strip
@@ -923,6 +1017,19 @@
         checkSites.forEach(function (s) {
             list.appendChild(buildPreflightSite(s));
         });
+        // Run sites without visual checks activated (wcd_enabled === false, Updates-page selection
+        // flow): static badged rows. They ARE updated, but never get pre/post screenshots (their
+        // checks are 0, so take_pre/take_post and the credit math exclude them automatically).
+        var disabledSites = runSites.filter(function (s) { return false === s.wcd_enabled; });
+        disabledSites.forEach(function (s) {
+            list.appendChild(el('div', { class: 'wcd-pf-site' }, [
+                el('div', { class: 'wcd-pf-urlshead is-skipped' }, [
+                    el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
+                    el('span', { class: 'wcd-pf-urlname', text: s.name }),
+                    el('span', { class: 'wcd-pf-urlcount', text: t('checksNotActivated') })
+                ])
+            ]));
+        });
         // Skipped sites (no pending updates): static greyed rows without accordion behavior;
         // they are not part of the run, the badge explains why.
         allSites.filter(function (s) { return false === s.has_updates; }).forEach(function (s) {
@@ -946,8 +1053,10 @@
             ]));
         }
 
-        // unchecked note (run sites that stay live without screenshots)
-        var unchecked = runSites.length - checkSites.length;
+        // unchecked note: ENABLED run sites with zero selected checks (they stay live without
+        // screenshots). Sites without activated checks are excluded: they already carry their own
+        // "Checks not activated" badge above, so counting them here would double-report them.
+        var unchecked = runSites.length - checkSites.length - disabledSites.length;
         if (unchecked > 0) {
             body.appendChild(el('p', { class: 'wcd-muted wcd-pf-note' }, [
                 el('i', { class: 'info circle icon' }),
@@ -970,7 +1079,7 @@
         ]);
         confirm.disabled = !enough;
         // The run card replaces the preflight in the SAME (already open) modal; the modal stays open.
-        confirm.addEventListener('click', function () { startRun(host, trigger, runSites); });
+        confirm.addEventListener('click', function () { startRun(host, trigger, runSites, updatesScope); });
         foot.appendChild(confirm);
         modal.appendChild(foot);
     }
@@ -1206,11 +1315,20 @@
         return loop();
     }
 
-    function runUpdatesSequential(sites) {
+    // updatesScope (optional) scopes each site's update to the run's type + its selected slugs
+    // (fresh run: the selection map; resumed run: the slugs persisted on the site entries). No
+    // slugs sent = all items of the type; no updatesScope = legacy whole-site update.
+    function runUpdatesSequential(sites, updatesScope) {
         return sites.reduce(function (chain, s) {
             return chain.then(function () {
+                var payload = { site_id: s.site_id };
+                if (updatesScope && updatesScope.update_type) {
+                    payload.update_type = updatesScope.update_type;
+                    var slugs = (updatesScope.selection && updatesScope.selection[s.site_id]) || s.slugs || [];
+                    if (slugs.length) { payload.slugs = slugs; }
+                }
                 // Tolerate a per-site update failure (e.g. offline): the post screenshots still run.
-                return api('run_update', { site_id: s.site_id }).catch(function () {});
+                return api('run_update', payload).catch(function () {});
             });
         }, Promise.resolve());
     }
@@ -1230,24 +1348,31 @@
         }, Promise.resolve()).then(function () { return flagged; });
     }
 
-    function startRun(host, trigger, sites) {
+    function startRun(host, trigger, sites, updatesScope) {
         if (activeRun) { return; }
         activeRun = true;
-        setTriggerRunning(trigger, true);
+        setAllTriggersRunning(true);
         var single     = 1 === sites.length;
         var checkSites = sites.filter(function (s) { return s.checks > 0; });
         var total      = checkSites.reduce(function (n, s) { return n + s.checks; }, 0);
         var run = mountRun(host, trigger, sites, checkSites, single, total, true);   // fresh run: open the popup now
+        run.updatesScope = updatesScope || null;
         startHeartbeat();
         // Track the run server-side so it can be resumed if this tab disappears mid-run.
         // Best effort: a failed tracking call must not block the run itself.
-        var tracking = api('run_start', {
+        var tracking = {
             driver: driverId(),
             site_ids: checkSites.map(function (s) { return s.site_id; }),
             names: checkSites.map(function (s) { return s.name; }),
             checks: checkSites.map(function (s) { return s.checks; })
-        }).catch(function () {});
-        tracking.then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
+        };
+        if (updatesScope && updatesScope.update_type) {
+            // Persist the scope so a resume re-applies the original selection.
+            tracking.update_type = updatesScope.update_type;
+            if (updatesScope.selection) { tracking.selection = updatesScope.selection; }
+        }
+        api('run_start', tracking).catch(function () {})
+            .then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
     }
 
     // Build the run card INSIDE the modal and render the "Updates running" reopen button next to the
@@ -1284,8 +1409,8 @@
 
     /* ── "Updates running" reopen button (next to the widget heading) ───────── */
     // While the run popup is closed, this button keeps the run reachable: clicking it reopens the
-    // popup. It renders into the header slot (`.wcd-run-reopen-slot`) on the widget; on the Updates
-    // banner, which has no such slot, it falls back to the run-host below the banner.
+    // popup. It renders into the header slot (`.wcd-run-reopen-slot`) on the widget; the Updates
+    // bar and per-site tab have no such slot, so it falls back to their run-host.
 
     function reopenSlot(run) {
         return document.querySelector('.wcd-run-reopen-slot') || run.host || null;
@@ -1335,6 +1460,26 @@
         var preBatchBySite = {}, postBatchBySite = {};
         var total = run.total;
 
+        // Defense in depth: with ZERO check sites, take_pre/take_post would send an empty
+        // site_ids array, which api() drops entirely (empty arrays append nothing), and the
+        // server's legacy fallback (scope_site_ids) would then dispatch screenshots for ALL
+        // enabled sites and burn credits. Currently unreachable (the preflight aborts with
+        // t('noSites') before startRun, and resume only tracks checks>0 sites), but if it is
+        // ever reached the run must install updates only: PRE -> UPDATES -> DONE, no take/poll.
+        if (!run.checkSites.length) {
+            setPhase(run, 0);
+            setShot(run.pre, { queue: 0, processing: 0, done: 0, failed: 0 });
+            setPhase(run, 1);
+            setFill(run, 1 / 3);
+            return runUpdatesSequential(run.sites, run.updatesScope).then(function () {
+                // Nothing left to screenshot server-side: stop tracking the run. Best effort.
+                api('run_discard', {}).catch(function () {});
+                setShot(run.post, { queue: 0, processing: 0, done: 0, failed: 0 });
+                setPhase(run, 3);
+                finishRun(run, {});
+            });
+        }
+
         // PRE
         setPhase(run, 0);
         // Show everything as queued straight away so the panel isn't 0/0/0/0 until the first poll.
@@ -1355,7 +1500,7 @@
             // UPDATES
             setPhase(run, 1);
             setFill(run, 1 / 3);
-            return runUpdatesSequential(run.sites);
+            return runUpdatesSequential(run.sites, run.updatesScope);
         }).then(function () {
             // POST
             setPhase(run, 2);
@@ -1391,7 +1536,7 @@
     function finishRun(run, flagged) {
         activeRun = false;
         stopHeartbeat();
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         run.card.setAttribute('data-state', 'done');
         run.dismiss.disabled = false;
         RUN_STEPS.forEach(function (st) { run.stepNodes[st.id].className = 'wcd-run__step is-done'; });
@@ -1466,7 +1611,7 @@
         activeRun = true;
         startHeartbeat();
         renderReopenButton(run, 'green', 'sync loading icon', t('reopenRunning'));
-        setTriggerRunning(run.trigger, true);
+        setAllTriggersRunning(true);
         run.card.setAttribute('data-state', 'running');
         run.dismiss.disabled = true;
         run.pill.className = 'wcd-run__pill is-running';
@@ -1523,7 +1668,7 @@
     // this tab (the user explicitly wants to see it) and opens the popup.
     var resumePendingShown = false;
     function showResumePending(host, state) {
-        setTriggerRunning(document.querySelector('.wcd-safe-update'), true);
+        setAllTriggersRunning(true);
         var slot = document.querySelector('.wcd-run-reopen-slot') || host;
         if (!slot) { return; }
         var btn = el('button', { class: 'ui small green button wcd-reopen', type: 'button' }, [
@@ -1544,7 +1689,7 @@
         resumePendingShown = false;
         var pending = document.querySelector('.wcd-reopen-wrap[data-pending]');
         if (pending && pending.parentNode) { pending.parentNode.innerHTML = ''; }
-        setTriggerRunning(document.querySelector('.wcd-safe-update'), false);
+        setAllTriggersRunning(false);
     }
 
     // Rebuild the run card from the persisted state and continue at its phase. The tracked sites are
@@ -1552,7 +1697,13 @@
     function resumeRun(host, state) {
         if (activeRunRef || activeRun) { return; }   // a takeover is already under way in this tab
         var sites = (state.sites || []).map(function (s) {
-            return { site_id: parseInt(s.site_id, 10), name: s.name || '', checks: Number(s.checks) || 0 };
+            return {
+                site_id: parseInt(s.site_id, 10),
+                name: s.name || '',
+                checks: Number(s.checks) || 0,
+                // Persisted item slugs of a scoped (Updates-page) run; empty = all of the type.
+                slugs: (s.slugs || []).map(String)
+            };
         }).filter(function (s) { return s.site_id; });
         if (!sites.length) { return; }
 
@@ -1560,11 +1711,13 @@
         resumePendingShown = false;   // the live run card now owns the slot
         var single  = 1 === sites.length;
         var total   = sites.reduce(function (n, s) { return n + s.checks; }, 0);
-        var trigger = document.querySelector('.wcd-safe-update');
-        setTriggerRunning(trigger, true);   // disable the CTA so a re-click cannot wipe the resumed card
+        var trigger = document.querySelector('.wcd-safe-update, .wcd-updates-run');
+        setAllTriggersRunning(true);   // disable the CTAs so a re-click cannot wipe the resumed card
         // A resumed run plays out in the background: do NOT pop the modal open on its own. The
         // "Updates running" button next to the widget heading lets the user open it when they want.
         var run = mountRun(host, trigger, sites, sites, single, total, false);
+        // Re-apply a scoped run's update type; the per-site slugs ride on the site entries.
+        run.updatesScope = state.update_type ? { update_type: state.update_type } : null;
         startHeartbeat();
 
         run.preBatches = values(state.pre_batches || {});
@@ -1616,10 +1769,11 @@
     }
 
     // Shared tail for a resumed run: update the not-yet-updated sites, then take + poll the post phase.
+    // Credit-safe: only the notUpdated sites run again, scoped to the run's persisted type + slugs.
     function resumeUpdatesThenPost(run, sites, notUpdated) {
         setPhase(run, 1);
         setFill(run, 1 / 3);
-        return runUpdatesSequential(notUpdated).then(function () {
+        return runUpdatesSequential(notUpdated, run.updatesScope).then(function () {
             setPhase(run, 2);
             setFill(run, 2 / 3);
             setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
@@ -1634,7 +1788,7 @@
     function failRun(run, e) {
         activeRun = false;
         stopHeartbeat();
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         run.card.setAttribute('data-state', 'error');
         run.dismiss.disabled = false;
         // Stop the spinner pill and flag the step that was in flight.
@@ -1659,13 +1813,22 @@
         removeReopenButton(run);
         activeRunRef = null;
         activeRun = false;
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         clearModalContent();
         closeModal();
         api('run_discard', {}).catch(function () {});
     }
 
-    // Reflect the run state on the launch CTA (spinner + disabled while a run is active).
+    // Lock/unlock every safe-update entry trigger on the page (the widget/tab `.wcd-safe-update`
+    // CTA and both Updates-page bar `.wcd-updates-run` buttons): a run started from or driven by
+    // any surface must block them all, or the unlocked sibling could open a second preflight.
+    function setAllTriggersRunning(running) {
+        document.querySelectorAll('.wcd-safe-update, .wcd-updates-run').forEach(function (node) {
+            setTriggerRunning(node, running);
+        });
+    }
+
+    // Reflect the run state on one launch CTA (spinner + disabled while a run is active).
     function setTriggerRunning(trigger, running) {
         if (!trigger) { return; }
         // Idempotent: never re-capture the restore label while already running (a second true call
@@ -1704,12 +1867,12 @@
         }
     });
 
-    /* ───────────────────────── Hero banner stats ───────────────────────── */
+    /* ───────────────────────── Widget stats ────────────────────────────── */
 
     // Fill the Pages/Checks stats once the dashboard has rendered (kept off the page-load path).
-    // Matches the Updates-page hero banner (.wcd-hero) and the dashboard safe-update widget
-    // (the [data-stats-scope] container inside its mainwp-scrolly-overflow); both carry
-    // data-stats-scope. At most one exists per page.
+    // Matches the dashboard safe-update widget's [data-stats-scope] container (inside its
+    // mainwp-scrolly-overflow). At most one exists per page; the Updates-page bar has no stats
+    // container, so this is a clean no-op there.
     function loadBannerStats() {
         var hero = document.querySelector('[data-stats-scope]');
         if (!hero) { return; }
@@ -1929,6 +2092,7 @@
     function onReady() {
         loadBannerStats();
         initRuns();
+        initSiteUpdatesBar();
         checkResume();
     }
 
@@ -1955,6 +2119,7 @@
         var settingsSave = e.target.closest && e.target.closest('.wcd-settings-save');
         var settingsCancel = e.target.closest && e.target.closest('.wcd-settings-cancel');
         var safe = e.target.closest && e.target.closest('.wcd-safe-update');
+        var updatesRun = e.target.closest && e.target.closest('.wcd-updates-run');
         var activateAll = e.target.closest && e.target.closest('.wcd-activate-all');
 
         if (tokenReset) {
@@ -1985,6 +2150,42 @@
             var scope = safe.getAttribute('data-scope') || 'bulk';
             var siteId = parseInt(safe.getAttribute('data-site-id'), 10) || 0;
             runPreflight(safe, scope, siteId);
+            return;
+        }
+        if (updatesRun) {
+            e.preventDefault();
+            if (updatesRun.disabled || updatesRun.classList.contains('is-running')) { return; }
+            var updateType = updatesRun.getAttribute('data-update-type') || '';
+            var mode = updatesRun.getAttribute('data-mode') || 'all';
+            var barSiteId = parseInt(updatesRun.getAttribute('data-site-id'), 10) || 0;
+            var updatesScope;
+            if (barSiteId) {
+                // Site Updates subpage: the tabs switch client-side (no reload), so the type
+                // resolves from the ACTIVE tab at click time. Unresolvable tabs (abandoned, db
+                // updates) degrade to a no-op alert, never a wrong-type run.
+                var activeTab = document.querySelector('.ui.tab.active[data-tab]');
+                updateType = activeTab ? (SITE_TAB_TYPES[activeTab.getAttribute('data-tab')] || '') : '';
+                if (!updateType) { window.alert(t('noSelection')); return; }
+                if ('selected' === mode) {
+                    var siteSel = readUpdatesSelection(updatesRun, updateType, activeTab);
+                    if (!Object.keys(siteSel).length) { window.alert(t('noSelection')); return; }
+                    updatesScope = { update_type: updateType, mode: 'selected', selection: siteSel };
+                } else {
+                    // NEVER send mode:'all' from the site context: the server would derive the
+                    // site set from ALL managed sites. An empty slug list under this site's key
+                    // means "every pending item of the type, on this site only".
+                    var allSel = {};
+                    allSel[barSiteId] = [];
+                    updatesScope = { update_type: updateType, mode: 'selected', selection: allSel };
+                }
+            } else {
+                updatesScope = { update_type: updateType, mode: mode, selection: null };
+                if ('selected' === mode) {
+                    updatesScope.selection = readUpdatesSelection(updatesRun.closest('.wcd-updates-bar'), updateType);
+                    if (!Object.keys(updatesScope.selection).length) { window.alert(t('noSelection')); return; }
+                }
+            }
+            runPreflight(updatesRun, 'bulk', 0, updatesScope);
         }
     });
 })();

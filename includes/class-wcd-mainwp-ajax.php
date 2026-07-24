@@ -25,6 +25,17 @@ class WCD_MainWP_Ajax {
 	// URL list page size on the Settings tab.
 	const URL_PAGE_SIZE = 50;
 
+	// Valid update-type scopes for the Updates-page flow (preflight/run_update/run_start).
+	const UPDATE_TYPES = array( 'core', 'plugins', 'themes', 'translations' );
+
+	// Maps an update type to the item 'kind' used by WCD_MainWP_Update_Flow's item lists.
+	const TYPE_KINDS = array(
+		'core'         => 'core',
+		'plugins'      => 'plugin',
+		'themes'       => 'theme',
+		'translations' => 'translation',
+	);
+
 	/**
 	 * Register every AJAX action handler.
 	 *
@@ -99,6 +110,96 @@ class WCD_MainWP_Ajax {
 		}
 
 		return isset( $_POST['site_id'] ) ? (int) $_POST['site_id'] : 0;
+	}
+
+	/**
+	 * Resolve the optional update-type scope from the POST payload (Updates-page flow).
+	 *
+	 * '' when the request carries no update_type (the legacy whole-site flow). An invalid value is
+	 * rejected hard instead of silently falling back to the legacy path, which would escalate a
+	 * scoped request to an all-types update.
+	 *
+	 * @return string One of UPDATE_TYPES, or '' when absent.
+	 */
+	protected static function update_type_from_request(): string {
+		if ( ! check_ajax_referer( self::NONCE, 'nonce', false ) || ! isset( $_POST['update_type'] ) ) {
+			return '';
+		}
+
+		$type = sanitize_text_field( wp_unslash( $_POST['update_type'] ) );
+		if ( ! in_array( $type, self::UPDATE_TYPES, true ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid update type.', 'webchangedetector-for-mainwp' ) ) );
+		}
+
+		return $type;
+	}
+
+	/**
+	 * Resolve the optional selection map from the POST payload: [ site_id => item slugs[] ].
+	 *
+	 * Shape: selection[<site_id>][] = slug. Site ids are cast to int, every slug is sanitized;
+	 * empty slug entries are dropped (the core tab has no slugs, so its sites arrive with one
+	 * empty placeholder entry that only keeps the site key present).
+	 *
+	 * @return array Map of site id => list of slugs (possibly empty).
+	 */
+	protected static function selection_from_request(): array {
+		if ( ! check_ajax_referer( self::NONCE, 'nonce', false ) || ! isset( $_POST['selection'] ) || ! is_array( $_POST['selection'] ) ) {
+			return array();
+		}
+
+		$selection = array();
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Nested array; every leaf is sanitized in the loop below.
+		foreach ( wp_unslash( $_POST['selection'] ) as $site_id => $slugs ) {
+			$site_id = (int) $site_id;
+			if ( $site_id < 1 ) {
+				continue;
+			}
+			$selection[ $site_id ] = is_array( $slugs )
+				? array_values( array_filter( array_map( 'sanitize_text_field', $slugs ) ) )
+				: array();
+		}
+
+		return $selection;
+	}
+
+	/**
+	 * Resolve the optional item slugs list from the POST payload (run_update).
+	 *
+	 * @return string[] Sanitized, non-empty slugs.
+	 */
+	protected static function slugs_from_request(): array {
+		if ( ! check_ajax_referer( self::NONCE, 'nonce', false ) || ! isset( $_POST['slugs'] ) || ! is_array( $_POST['slugs'] ) ) {
+			return array();
+		}
+
+		return array_values( array_filter( array_map( 'sanitize_text_field', wp_unslash( $_POST['slugs'] ) ) ) );
+	}
+
+	/**
+	 * Filter a site's pending-update items down to one update type and (optionally) a slug set.
+	 *
+	 * @param array  $items       Item list from WCD_MainWP_Update_Flow::update_items_for_site().
+	 * @param string $update_type One of UPDATE_TYPES.
+	 * @param array  $slugs       Item slugs to keep; empty = every item of the type (non-core only;
+	 *                            core items never carry a slug).
+	 * @return array Filtered items.
+	 */
+	protected static function filter_update_items( array $items, string $update_type, array $slugs ): array {
+		$kind = self::TYPE_KINDS[ $update_type ] ?? '';
+
+		return array_values(
+			array_filter(
+				$items,
+				static function ( $item ) use ( $kind, $slugs ) {
+					if ( ( $item['kind'] ?? '' ) !== $kind ) {
+						return false;
+					}
+
+					return 'core' === $kind || empty( $slugs ) || in_array( (string) ( $item['slug'] ?? '' ), $slugs, true );
+				}
+			)
+		);
 	}
 
 	/**
@@ -593,38 +694,74 @@ class WCD_MainWP_Ajax {
 	/**
 	 * Build the preflight summary (sites, pages, checks, pending updates, credits) for a run.
 	 *
+	 * Legacy shape (no update_type): the enabled-sites scope from site_ids[]/site_id/all-enabled,
+	 * unchanged. With the additive Updates-page fields the run is scoped to one update type and
+	 * either an explicit checkbox selection map (selection[<site_id>][] = slug) or mode=all (the
+	 * server derives the site set from the pending-update columns). The selection deliberately
+	 * includes sites NOT enabled for visual checks (they are updated without checks; the popup
+	 * badges them via the additive per-site wcd_enabled flag), so the scoped path validates
+	 * against the managed-sites list, not the enabled one.
+	 *
 	 * @return void
 	 */
 	public static function preflight(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$scope = self::scope_site_ids();
-		$token = self::token();
+		$token   = self::token();
+		$managed = WCD_MainWP_Site_Map::managed_sites();
+
+		$update_type = self::update_type_from_request();
+		$mode        = '';
+		$selection   = array();
+		if ( '' !== $update_type ) {
+			// Nonce verified above (update_type_from_request re-checked it too).
+			$mode        = isset( $_POST['mode'] ) ? sanitize_text_field( wp_unslash( $_POST['mode'] ) ) : '';
+			$managed_ids = array_map( 'intval', array_keys( $managed ) );
+			if ( 'all' === $mode ) {
+				// Every managed site; the per-site item filter below drops the ones without
+				// pending updates of this type. No slug filter (empty slugs = all of the type).
+				$scope = $managed_ids;
+			} else {
+				$selection = self::selection_from_request();
+				$scope     = array_values( array_intersect( array_map( 'intval', array_keys( $selection ) ), $managed_ids ) );
+			}
+		} else {
+			$scope = self::scope_site_ids();
+		}
 
 		$sites         = array();
 		$checks        = 0;
 		$pages         = 0;
 		$total_updates = 0;
-		$managed       = WCD_MainWP_Site_Map::managed_sites();
 		// When MainWP's DB layer is unavailable the per-site update info is unknown; every site
 		// then counts as eligible (fail open to the unfiltered run) instead of being skipped.
 		$counts_known = WCD_MainWP_Update_Flow::updates_info_available();
 		foreach ( $scope as $site_id ) {
-			$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
-			if ( '' === $group_id ) {
+			$group_id    = WCD_MainWP_Site_Map::get_manual_group( $site_id );
+			$wcd_enabled = '' !== $group_id;
+			if ( '' === $update_type && ! $wcd_enabled ) {
+				// Legacy scope only ever covers enabled sites; keep that behavior unchanged.
 				continue;
 			}
 
-			$items       = WCD_MainWP_Update_Flow::update_items_for_site( $site_id );
+			$items = WCD_MainWP_Update_Flow::update_items_for_site( $site_id );
+			if ( '' !== $update_type ) {
+				$items = self::filter_update_items( $items, $update_type, 'all' === $mode ? array() : ( $selection[ $site_id ] ?? array() ) );
+				if ( 'all' === $mode && $counts_known && 0 === count( $items ) ) {
+					// mode=all only covers sites with pending updates of this type.
+					continue;
+				}
+			}
 			$has_updates = ! $counts_known || count( $items ) > 0;
 
 			$site_pages  = 0;
 			$site_checks = 0;
 			$meta_error  = false;
-			if ( $has_updates ) {
+			if ( $has_updates && $wcd_enabled ) {
 				// Meta-only fetch (same as banner_stats): the API aggregates the SELECTED counts
 				// group-wide in `meta`, so per_page=1 keeps the payload tiny. The actual URL list
 				// lazy-loads in the preflight when a site row is expanded (get_site_urls). Sites
-				// without pending updates skip the fetch: they are not part of the run.
+				// without pending updates skip the fetch (they are not part of the run), and sites
+				// not enabled for visual checks never get a group call (checks stay 0).
 				$response    = WCD_MainWP_API::get_group_urls( $group_id, $token, array( 'per_page' => 1 ) );
 				$meta        = ( $response['ok'] && isset( $response['data']['meta'] ) && is_array( $response['data']['meta'] ) ) ? $response['data']['meta'] : array();
 				$site_pages  = (int) ( $meta['selected_urls_count'] ?? 0 );
@@ -644,6 +781,9 @@ class WCD_MainWP_Ajax {
 				// Only sites with pending updates participate in the run; the popup shows the
 				// others greyed out. Additive field (backward compatible).
 				'has_updates' => $has_updates,
+				// Additive: false = updated without pre/post checks (popup badges it); such a
+				// site has checks=0, so the aggregates and credit math exclude it automatically.
+				'wcd_enabled' => $wcd_enabled,
 				'updates'     => array(
 					'total' => count( $items ),
 					'items' => $items,
@@ -651,6 +791,8 @@ class WCD_MainWP_Ajax {
 			);
 
 			// Aggregates (and therefore the credit math) only cover the sites that will run.
+			// Non-enabled sites contribute their update items (they DO get updated) but never
+			// checks or pages (both are 0 for them).
 			if ( $has_updates ) {
 				$checks        += $site_checks;
 				$pages         += $site_pages;
@@ -845,20 +987,39 @@ class WCD_MainWP_Ajax {
 	/**
 	 * Trigger the WordPress update on the requested site.
 	 *
+	 * Legacy shape (no update_type): all four update types, gated on the site being enabled for
+	 * visual checks. Additive Updates-page shape: update_type (+ optional slugs[]) scopes the
+	 * update to one type / specific items, and the enabled gate is dropped because the selection
+	 * flow deliberately updates non-enabled sites without checks (the preflight badge + confirm
+	 * cover the cost/UX protection; nonce + manage_options remain the security boundary).
+	 *
 	 * @return void
 	 */
 	public static function run_update(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$site_id = self::site_id();
+		$site_id     = self::site_id();
+		$update_type = self::update_type_from_request();
+		$slugs       = '' !== $update_type ? self::slugs_from_request() : array();
 
-		// Only trigger updates for sites that are enabled for visual checks (same gate the
-		// screenshot handlers apply). Without this a crafted id could update a non-enabled site,
-		// which would then have no pre screenshot to compare against.
-		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+		if ( '' === $update_type ) {
+			// Legacy path: only sites enabled for visual checks may be updated. Without this a
+			// crafted id could update a non-enabled site, which would then have no pre screenshot
+			// to compare against.
+			if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+				wp_send_json_error(
+					array(
+						/* translators: %d: MainWP site id. */
+						'message' => sprintf( __( 'Site %d is not enabled for visual checks.', 'webchangedetector-for-mainwp' ), $site_id ),
+						'offline' => false,
+					)
+				);
+			}
+		} elseif ( ! $site_id || ! isset( WCD_MainWP_Site_Map::managed_sites()[ $site_id ] ) ) {
+			// Scoped path: the site only has to be a managed MainWP site.
 			wp_send_json_error(
 				array(
 					/* translators: %d: MainWP site id. */
-					'message' => sprintf( __( 'Site %d is not enabled for visual checks.', 'webchangedetector-for-mainwp' ), $site_id ),
+					'message' => sprintf( __( 'Site %d is not a managed site.', 'webchangedetector-for-mainwp' ), $site_id ),
 					'offline' => false,
 				)
 			);
@@ -867,7 +1028,7 @@ class WCD_MainWP_Ajax {
 		// Keep the tracked run alive: a single site's synchronous update can take minutes with no
 		// polling in between, and must not make the run look abandoned to another tab.
 		WCD_MainWP_Update_Flow::touch_run();
-		$result = WCD_MainWP_Update_Flow::trigger_site_update( $site_id );
+		$result = WCD_MainWP_Update_Flow::trigger_site_update( $site_id, $update_type, $slugs );
 
 		if ( ! $result['ok'] ) {
 			wp_send_json_error(
@@ -1146,7 +1307,9 @@ class WCD_MainWP_Ajax {
 
 	/**
 	 * Start tracking a run server-side. The payload carries the per-site name + check count the
-	 * resume card needs later (the browser already has them from the preflight).
+	 * resume card needs later (the browser already has them from the preflight). The additive
+	 * update_type + selection[<site_id>][] fields persist an Updates-page run's scope so a resume
+	 * re-applies the original selection.
 	 *
 	 * @return void
 	 */
@@ -1176,8 +1339,10 @@ class WCD_MainWP_Ajax {
 			wp_send_json_error( array( 'message' => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
 		}
 
-		$driver = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
-		WCD_MainWP_Update_Flow::start_run( $sites, $driver );
+		$driver      = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
+		$update_type = self::update_type_from_request();
+		$selection   = '' !== $update_type ? self::selection_from_request() : array();
+		WCD_MainWP_Update_Flow::start_run( $sites, $driver, $update_type, $selection );
 		wp_send_json_success( array( 'tracking' => true ) );
 	}
 
@@ -1207,6 +1372,15 @@ class WCD_MainWP_Ajax {
 			wp_send_json_success( array( 'active' => false ) );
 		}
 
+		// Additive resume scope: each site entry carries its persisted item slugs (empty = all of
+		// the run's type), so a resumed Updates-page run never installs more than selected.
+		$site_slugs = isset( $state['site_slugs'] ) && is_array( $state['site_slugs'] ) ? $state['site_slugs'] : array();
+		$run_sites  = array();
+		foreach ( $state['sites'] as $sid => $site ) {
+			$site['slugs'] = array_map( 'strval', (array) ( $site_slugs[ $sid ] ?? array() ) );
+			$run_sites[]   = $site;
+		}
+
 		wp_send_json_success(
 			array(
 				'active'        => true,
@@ -1217,7 +1391,9 @@ class WCD_MainWP_Ajax {
 				'idle'          => $idle,
 				'driver'        => (string) ( $state['driver'] ?? '' ),
 				'phase'         => (string) ( $state['phase'] ?? 'pre' ),
-				'sites'         => array_values( $state['sites'] ),
+				// Additive: the run's update-type scope ('' = legacy whole-site run).
+				'update_type'   => (string) ( $state['update_type'] ?? '' ),
+				'sites'         => $run_sites,
 				'pre_batches'   => $pre,
 				'post_batches'  => isset( $state['post_batches'] ) && is_array( $state['post_batches'] ) ? $state['post_batches'] : array(),
 				'updated_sites' => array_values( array_map( 'intval', $updated ) ),

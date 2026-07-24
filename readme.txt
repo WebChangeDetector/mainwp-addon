@@ -31,12 +31,12 @@ An on-demand check is a visual diff you run around a change you make yourself, l
 
 = Features =
 
-* One-click safe updates: pre-update screenshots, updates, post-update screenshots, comparison: all in one run across all child sites.
+* One-click WCD Updates: pre-update screenshots, updates, post-update screenshots, comparison: all in one run across all child sites.
 * Automatic cache clearing: the child site's cache is cleared before the pre-update screenshots and after the updates, so screenshots never show a stale cached page. Works with 20+ caching plugins (WP Rocket, LiteSpeed Cache, W3 Total Cache, WP Super Cache and more) through the MainWP Child plugin, with nothing extra to install.
 * Bulk or single site: run the flow for every enabled child site at once or for one site from its overview.
 * Page selection per site: choose which URLs are checked, separately for desktop and mobile.
 * Checks overview: all runs across your sites with filters, change percentages and side-by-side comparisons.
-* Safe Update widget: start a run from a draggable, hideable widget on your Operations dashboard or a single child site's overview.
+* WCD Updates widget: start a run from a draggable, hideable widget on your Operations dashboard or a single child site's overview.
 * Live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress, and automatic resume if you navigate away mid-run.
 * Account overview: your plan, remaining checks and renewal date on the Account tab.
 * Auto-enable new sites: optionally provision every newly added MainWP child site for visual checks automatically.
@@ -103,11 +103,11 @@ Updates you start outside the plugin's own flow still trigger post-update screen
 
 == Screenshots ==
 
-1. The Safe Update widget on your MainWP Operations dashboard: how many sites have updates, how many pages and checks the next run will cover, and one button to start it.
+1. The WCD Updates widget on your MainWP Operations dashboard: how many sites have updates, how many pages and checks the next run will cover, and one button to start it.
 2. Pre-flight summary before the run: sites, pages, checks and credit coverage, plus the exact updates that will be installed, per site.
 3. The live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress. When it finishes you see "All good" or the number of pages to review, with Re-check and View results.
 4. Side-by-side before/after comparison with the AI change analysis: real changes flagged, dynamic content auto-ignored, with the visual difference percentage and a browser-console check.
-5. The Run tab on the WebChange Detector extension page: start a safe-update run across all your enabled sites.
+5. The Run tab on the WebChange Detector extension page: start a WCD Updates run across all your enabled sites.
 6. The Checks tab: every run across your sites with filters for date, status, website and detection, plus an AI summary per run.
 7. The Settings tab: activate a website and choose which URLs are checked, separately for desktop and mobile. One click activates checks for all your managed websites.
 8. The Account tab: your plan, remaining checks and active sites, the API token, auto-enable for new sites, and the reset-connection option.

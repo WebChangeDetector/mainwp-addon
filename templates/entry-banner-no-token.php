@@ -2,9 +2,9 @@
 /**
  * WebChange Detector setup hint banner (no API token yet).
  *
- * Rendered in place of the hero banner on the MainWP dashboard overview when no API token is
- * configured (see WCD_MainWP_Bootstrap::render_scoped_banner()). It replaces the previous silent
- * no-op so first-run users get an actionable next step: create an account and add the token.
+ * Rendered by the Safe Update dashboard widget (WCD_MainWP_Widget::render_safe_update_metabox())
+ * when no API token is configured, so first-run users get an actionable next step: create an
+ * account and add the token.
  *
  * @package WebChangeDetector_MainWP
  */
