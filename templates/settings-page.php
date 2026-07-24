@@ -5,9 +5,11 @@
  *
  * Provided by WCD_MainWP_Site_Settings::render_settings_form():
  *
- * @var string $token   Stored API token.
- * @var array  $account Account details (plan_name, checks_left, checks_limit, ...).
- * @var array  $map     Stored site map [ id => [ enabled, ... ] ].
+ * @var string $token                     Stored API token.
+ * @var array  $account                   Account details (plan_name, checks_left, checks_limit, ...).
+ * @var array  $map                       Stored site map [ id => [ enabled, ... ] ].
+ * @var string $wcd_mainwp_pending_email  Signup email while the activation link is unclicked, else ''.
+ * @var bool   $wcd_mainwp_just_activated Whether the pending signup was verified on this load.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -24,6 +26,12 @@ if ( false !== $wcd_mainwp_verified_flag ) {
 $wcd_mainwp_reset_flag = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::RESET_CACHE );
 if ( false !== $wcd_mainwp_reset_flag ) {
 	WCD_MainWP_Options::delete_transient( WCD_MainWP_Site_Settings::RESET_CACHE );
+}
+// One-time signup failure notice (message + repopulation data), read once, then clear.
+$wcd_mainwp_signup_error = WCD_MainWP_Options::get_transient( WCD_MainWP_Site_Settings::SIGNUP_ERROR_CACHE );
+$wcd_mainwp_signup_error = is_array( $wcd_mainwp_signup_error ) ? $wcd_mainwp_signup_error : array();
+if ( ! empty( $wcd_mainwp_signup_error ) ) {
+	WCD_MainWP_Options::delete_transient( WCD_MainWP_Site_Settings::SIGNUP_ERROR_CACHE );
 }
 $wcd_mainwp_active_sites = 0;
 foreach ( $map as $wcd_mainwp_entry ) {
@@ -61,6 +69,65 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 
 <?php if ( '1' === $wcd_mainwp_reset_flag ) : ?>
 	<div class="ui info message"><p><?php esc_html_e( 'WebChange Detector connection reset. Enter an API token to reconnect.', 'webchangedetector-for-mainwp' ); ?></p></div>
+<?php endif; ?>
+
+<?php if ( $wcd_mainwp_just_activated ) : ?>
+	<div class="ui positive message"><p><?php esc_html_e( 'Your account is activated. Head to the Settings tab to enable your sites for visual checks.', 'webchangedetector-for-mainwp' ); ?></p></div>
+<?php endif; ?>
+
+<?php if ( '' !== $wcd_mainwp_pending_email ) : ?>
+	<div class="ui info message">
+		<p>
+			<?php
+			printf(
+				/* translators: %s: the signup email address. */
+				esc_html__( 'We sent an activation link to %s. Click the link in the email, then reload this page.', 'webchangedetector-for-mainwp' ),
+				'<strong>' . esc_html( $wcd_mainwp_pending_email ) . '</strong>'
+			);
+			?>
+		</p>
+		<p><a href="<?php echo esc_url( WCD_MainWP_Bootstrap::tab_url( 'account' ) ); ?>"><?php esc_html_e( 'Reload this page', 'webchangedetector-for-mainwp' ); ?></a></p>
+	</div>
+<?php endif; ?>
+
+<?php if ( '' === $token ) : ?>
+	<?php if ( ! empty( $wcd_mainwp_signup_error['message'] ) ) : ?>
+		<div class="ui negative message"><p><?php echo esc_html( $wcd_mainwp_signup_error['message'] ); ?></p></div>
+	<?php endif; ?>
+
+	<h3 class="ui header"><?php esc_html_e( 'Start your free trial', 'webchangedetector-for-mainwp' ); ?></h3>
+	<p class="wcd-muted"><?php esc_html_e( 'Create your free WebChange Detector account right here. No credit card required.', 'webchangedetector-for-mainwp' ); ?></p>
+	<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wcd-signup-form">
+		<?php wp_nonce_field( 'wcd_signup' ); ?>
+		<input type="hidden" name="action" value="wcd_signup" />
+		<div class="ui form">
+			<div class="two fields">
+				<div class="field">
+					<label for="wcd_signup_name_first"><?php esc_html_e( 'First name', 'webchangedetector-for-mainwp' ); ?></label>
+					<input type="text" id="wcd_signup_name_first" name="name_first" required
+							value="<?php echo esc_attr( $wcd_mainwp_signup_error['name_first'] ?? '' ); ?>" />
+				</div>
+				<div class="field">
+					<label for="wcd_signup_name_last"><?php esc_html_e( 'Last name', 'webchangedetector-for-mainwp' ); ?></label>
+					<input type="text" id="wcd_signup_name_last" name="name_last" required
+							value="<?php echo esc_attr( $wcd_mainwp_signup_error['name_last'] ?? '' ); ?>" />
+				</div>
+			</div>
+			<div class="field">
+				<label for="wcd_signup_email"><?php esc_html_e( 'Email address', 'webchangedetector-for-mainwp' ); ?></label>
+				<input type="email" id="wcd_signup_email" name="email" required
+						value="<?php echo esc_attr( $wcd_mainwp_signup_error['email'] ?? '' ); ?>" />
+			</div>
+			<div class="field">
+				<label for="wcd_signup_password"><?php esc_html_e( 'Password', 'webchangedetector-for-mainwp' ); ?></label>
+				<input type="password" id="wcd_signup_password" name="password" required minlength="6"
+						autocomplete="new-password" />
+			</div>
+			<button type="submit" class="ui primary button"><?php esc_html_e( 'Start your free trial', 'webchangedetector-for-mainwp' ); ?></button>
+		</div>
+	</form>
+
+	<div class="ui horizontal divider"><?php esc_html_e( 'Already have an account?', 'webchangedetector-for-mainwp' ); ?></div>
 <?php endif; ?>
 
 <?php if ( '' !== $token && ! empty( $account ) ) : ?>
@@ -139,11 +206,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 	</form>
 <?php endif; ?>
 
-<?php if ( '' === $token ) : ?>
-	<div class="ui info message wcd-mt">
-		<p><?php echo wp_kses_post( WCD_MainWP_Bootstrap::no_token_hint_html() ); ?></p>
-	</div>
-<?php elseif ( empty( $account ) ) : ?>
+<?php if ( '' !== $token && empty( $account ) && '' === $wcd_mainwp_pending_email && ! $wcd_mainwp_just_activated ) : ?>
 	<div class="ui warning message wcd-mt">
 		<p><?php esc_html_e( 'Could not retrieve account data. Please check your API token.', 'webchangedetector-for-mainwp' ); ?></p>
 	</div>

@@ -40,6 +40,13 @@ class WCD_MainWP_Bootstrap {
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-widget.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-runs-view.php';
 
+		// Front-end responder for the trial-signup domain verification: during the signup POST the
+		// API GETs http://{domain}/?wcd-verify=... and expects the one-shot secret back. Deliberately
+		// wired here, NOT behind the MAINWP_VERSION gate in setup(): the GET hits the public front
+		// end, and it must keep answering even if MainWP failed to load. WP-core hook only, no
+		// MainWP internals; the method self-disarms (no secret stored or a token exists = no-op).
+		add_action( 'init', array( WCD_MainWP_Site_Settings::class, 'maybe_answer_verify' ) );
+
 		add_action( 'plugins_loaded', array( self::class, 'setup' ) );
 	}
 
@@ -200,10 +207,9 @@ class WCD_MainWP_Bootstrap {
 		$settings_url = self::tab_url( 'account' );
 
 		return sprintf(
-			/* translators: 1: webchangedetector.com account link, 2: settings page link. */
-			esc_html__( 'Create an account at %1$s if you do not have one yet, then enter your API token in %2$s to enable visual checks.', 'webchangedetector-for-mainwp' ),
-			'<a href="https://www.webchangedetector.com" target="_blank" rel="noopener">webchangedetector.com</a>',
-			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'the settings', 'webchangedetector-for-mainwp' ) . '</a>'
+			/* translators: %s: Account tab link. */
+			esc_html__( 'Create your free trial account or connect an existing one in the %s.', 'webchangedetector-for-mainwp' ),
+			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Account tab', 'webchangedetector-for-mainwp' ) . '</a>'
 		);
 	}
 

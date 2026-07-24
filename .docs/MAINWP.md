@@ -119,10 +119,14 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 
 Client: `WCD_MainWP_API` (`includes/class-wcd-mainwp-api.php`), all static. Base URL
 `https://api.webchangedetector.com/api/v2`, overridable via the `WCD_API_URL` **or** `WCD_API_URL_V2`
-constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-plugin`. Every method returns
-`['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`.
+constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-source: mainwp` (deliberately NOT
+`x-wcd-plugin`, see the client's header comment). Every method returns
+`['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`. Web-root endpoints outside `/api/v2`
+(currently only the trial signup) resolve via `get_web_url()` (`WCD_API_URL_WEB` override, default
+`https://api.webchangedetector.com`).
 
-Methods: `get_account`, `list_groups`, `create_group`, `update_group`, `get_group` (single group,
+Methods: `get_account`, `create_trial_account` (pre-token signup, standalone `wp_remote_post`, see
+"Free trial signup" below), `list_groups`, `create_group`, `update_group`, `get_group` (single group,
 on-demand settings prefill; the password is never returned, `has_basic_auth` signals it is set),
 `get_group_urls`, `update_url_in_group`,
 `update_urls_in_group`, `select_all_urls_in_group` (toggles one device for ALL group urls in one
@@ -133,6 +137,44 @@ toggles so large sites stay fast), `create_website`, `sync_urls` + `start_url_sy
 
 Vocabulary: data-model terms (`manual`/`monitoring`, `source=manual`) in API calls; UI copy says
 "On-Demand Check". Never expose AI model names (the API strips them server-side).
+
+## Free trial signup (Account tab)
+
+New users can create their free WCD trial account directly from the Account tab; connecting an
+existing token stays available below a "Already have an account?" divider. This is the ONE
+sanctioned pre-token API call and it only fires on the explicit form submit (see REVIEW.md).
+
+Flow (`WCD_MainWP_Site_Settings::handle_signup()`, `admin_post_wcd_signup`, nonce `wcd_signup` +
+`manage_options`):
+
+1. Validate input (email, non-empty names, password of at least 6 chars; the password is hashed
+   with `wp_hash_password()` immediately and never stored or sanitized).
+2. Store a one-shot verify secret (`wcd_mainwp_verify_secret` option, `wp_generate_password(40)`).
+3. `WCD_MainWP_API::create_trial_account()` POSTs `email`, `name_first`, `name_last`, the hashed
+   `password`, `validation_string` (the secret), `domain` (`normalize_domain( home_url() )`), `ip`
+   (`SERVER_ADDR`, informational) and `cms=wordpress` to `{web root}/add-trial-account` with the
+   `x-wcd-source: mainwp` header. During this POST the API synchronously GETs
+   `http://{domain}/?wcd-verify=...`; the front-end responder
+   (`WCD_MainWP_Site_Settings::maybe_answer_verify()`, WP-core `init` hook wired in
+   `Bootstrap::init()` OUTSIDE the `MAINWP_VERSION` gate) answers with the JSON-encoded secret.
+4. The secret is deleted right after the attempt (success or not).
+5. Success (HTTP 200 + a body matching `/^[a-zA-Z0-9]{40}$/`): store the token, drop the account
+   cache, set `wcd_mainwp_activation_pending` (value = signup email) and redirect to the Account
+   tab. NO `/api/v2` call is made post-signup: they all 403 (`ActivateAccount`) until the emailed
+   activation link is clicked.
+6. Failure (200 `["error","<msg>"]`, 422, transport error): a one-time notice + repopulation data
+   (never the password) goes into the `wcd_mainwp_signup_error` transient (120s) and the form is
+   re-shown.
+
+Pending state: while `wcd_mainwp_activation_pending` is set the extension page defaults to the
+Account tab, which shows a "we sent an activation link to {email}" notice and re-verifies the token
+once per load (`verify_token()`, whose result additively carries `status`): a 403 keeps the pending
+notice, success clears the flag and shows the "activated" notice plus the account cards. The
+activation email's return link targets the extension page
+(`admin.php?page=Extensions-Webchangedetector-For-Mainwp&tab=account`; keyed off
+`signup_source=mainwp` server-side, so renaming the plugin folder requires a coordinated API edit).
+`reset_connection()` and a manual token save both clear the secret + pending flag (a manually saved
+token supersedes a pending signup).
 
 ## Safe-Update Flow (confirm popup + unified in-card run, phased)
 
@@ -372,8 +414,8 @@ active because navigating away mid-UPDATES can interrupt a non-transactional upd
 
 The whole UI lives on the add-on's own **extension page** (MainWP > Extensions > WebChange Detector).
 `templates/admin-page.php` is the shell: it resolves the active tab from the `?tab=` query arg
-(`run` / `checks` / `settings` / `account`; default = **Account** when no token is configured, else
-**Run**), renders the MainWP extension chrome once (`mainwp_pageheader_extensions` /
+(`run` / `checks` / `settings` / `account`; default = **Account** when no token is configured OR a
+signup activation is pending, else **Run**), renders the MainWP extension chrome once (`mainwp_pageheader_extensions` /
 `mainwp_pagefooter_extensions`), draws the tab switcher (`WCD_MainWP_Runs_View::render_tabs()`), and
 dispatches to the active tab body. Tabs switch via a **full page reload** (`?tab=...`); URLs are built
 by `WCD_MainWP_Bootstrap::tab_url()`. The full reload keeps the Run-tab safe-update resume/heartbeat
@@ -413,8 +455,9 @@ The four tab bodies:
   wants a change (unchanged dots => key omitted; cleared field => `''`; a new value => that value),
   keeping the endpoint contract-simple. `css`/`js` are stored verbatim (only unslashed). The region
   value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`).
-- **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): API token,
-  auto-enable toggle, plan/credits card. Saving the token redirects back to this tab.
+- **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): trial
+  signup form (no-token state, primary; see "Free trial signup"), API token form, auto-enable
+  toggle, plan/credits card. Saving the token redirects back to this tab.
 
 The switcher is MainWP's **native sub-navigation bar** rendered as a Fomantic
 **`ui labeled icon inverted menu mainwp-sub-submenu`** (the exact class list the SeoPress MainWP
@@ -484,9 +527,17 @@ set to `http://api.webchangedetector.test/api/v2/`):
 { "config": { "WCD_API_URL_V2": "http://api.webchangedetector.test/api/v2/" } }
 ```
 
-The client reads `WCD_API_URL` first, then `WCD_API_URL_V2`, then the production default. Run
-`wp-env start` after changing the override. Note: wp-env runs in Docker, so the override host must be
-resolvable + reachable from inside the container.
+The client reads `WCD_API_URL` first, then `WCD_API_URL_V2`, then the production default. For the
+trial signup (a web-root endpoint outside `/api/v2`), add `WCD_API_URL_WEB` to the same override:
+
+```json
+{ "config": { "WCD_API_URL_V2": "http://api.webchangedetector.test/api/v2/", "WCD_API_URL_WEB": "http://api.webchangedetector.test" } }
+```
+
+Run `wp-env start` after changing the override. Note: wp-env runs in Docker, so the override host
+must be resolvable + reachable from inside the container (and for signup, the API must be able to
+reach the wp-env site back for the `?wcd-verify` GET; enforcement is currently disabled server-side,
+so signup still succeeds when it cannot).
 
 ## Release & Distribution
 

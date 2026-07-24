@@ -18,6 +18,10 @@ class WCD_MainWP_API {
 
 	const DEFAULT_API_URL = 'https://api.webchangedetector.com/api/v2';
 
+	// Web root of the API host (no /api/v2). The trial signup endpoint is a public web route,
+	// not part of the versioned API; see get_web_url().
+	const DEFAULT_WEB_URL = 'https://api.webchangedetector.com';
+
 	// Owning-integration marker sent to the API so MainWP gets its own website per domain (its ?p=ID
 	// URLs must never mix with the first-party clean permalinks). Sent as managed_by on create and as
 	// the x-wcd-managed-by header on sync; see the API's website_managed_by enum.
@@ -64,6 +68,21 @@ class WCD_MainWP_API {
 		}
 
 		return self::DEFAULT_API_URL;
+	}
+
+	/**
+	 * Resolve the web-root URL of the API host (endpoints outside /api/v2, like the trial signup).
+	 * Overridable via the WCD_API_URL_WEB constant (same name the customer WP plugin uses).
+	 * Trailing slash is trimmed.
+	 *
+	 * @return string The resolved web-root URL.
+	 */
+	protected static function get_web_url(): string {
+		if ( defined( 'WCD_API_URL_WEB' ) && WCD_API_URL_WEB ) {
+			return rtrim( WCD_API_URL_WEB, '/' );
+		}
+
+		return self::DEFAULT_WEB_URL;
 	}
 
 	/**
@@ -169,6 +188,12 @@ class WCD_MainWP_API {
 	 */
 	protected static function extract_error( $data, int $status ): string {
 		if ( is_array( $data ) ) {
+			// The API answers every /api/v2 call with 403 {"message":"ActivateAccount"} until the
+			// account's emailed activation link was clicked. Map the literal message to a friendly
+			// instruction on every surface (site toggle, account read, verify).
+			if ( isset( $data['message'] ) && 'ActivateAccount' === $data['message'] ) {
+				return __( 'Your account is not activated yet. Please click the activation link in the email we sent you, then try again.', 'webchangedetector-for-mainwp' );
+			}
 			if ( ! empty( $data['message'] ) && is_string( $data['message'] ) ) {
 				return $data['message'];
 			}
@@ -191,6 +216,62 @@ class WCD_MainWP_API {
 	}
 
 	/* ────────────────────────────── Account ────────────────────────────── */
+
+	/**
+	 * Create a free trial account via the public web-root signup endpoint.
+	 *
+	 * Standalone wp_remote_post on purpose: request() hard-requires a Bearer token and JSON-decodes
+	 * the body, while the signup is unauthenticated and answers a bare 40-char token string on
+	 * success. This is the ONE sanctioned API call before a token is configured, and it only ever
+	 * fires on an explicit user submit (wordpress.org guideline 7).
+	 *
+	 * Response contract (see the API's AddTrialAccountController):
+	 * - HTTP 200 with a bare 40-char alphanumeric body: success, data = the new API token.
+	 * - HTTP 200 with JSON ["error", "<message>"]: rejected (e.g. email already registered).
+	 * - HTTP 422: Laravel validation errors.
+	 *
+	 * @param array $fields Signup fields: email, name_first, name_last, password (pre-hashed),
+	 *                      validation_string, domain, ip, cms.
+	 * @return array Normalized result with keys 'ok' (bool), 'status' (int), 'data' (mixed), 'error' (string).
+	 */
+	public static function create_trial_account( array $fields ): array {
+		$response = wp_remote_post(
+			self::get_web_url() . '/add-trial-account',
+			array(
+				'timeout' => 30,
+				'headers' => array(
+					'Accept'       => 'application/json',
+					'Content-Type' => 'application/json',
+					'x-wcd-source' => 'mainwp',
+				),
+				'body'    => wp_json_encode( $fields ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return self::result( false, 0, null, $response->get_error_message() );
+		}
+
+		$status = (int) wp_remote_retrieve_response_code( $response );
+		$body   = trim( (string) wp_remote_retrieve_body( $response ) );
+
+		// Success ONLY when the body has the exact API-token shape. Anything else (error strings,
+		// proxy HTML, truncated bodies) must never be stored as a token.
+		if ( 200 === $status && preg_match( '/^[a-zA-Z0-9]{40}$/', $body ) ) {
+			return self::result( true, $status, $body, '' );
+		}
+
+		$data = json_decode( $body, true );
+
+		// The endpoint reports "email already registered" as HTTP 200 ["error", "<message>"].
+		if ( 200 === $status && is_array( $data ) && isset( $data[0], $data[1] ) && 'error' === $data[0] && is_string( $data[1] ) && '' !== $data[1] ) {
+			return self::result( false, $status, $data, $data[1] );
+		}
+
+		// 422 validation errors and any other failure shape: reuse the shared extractor
+		// (first Laravel validation message, else a generic error with the HTTP status).
+		return self::result( false, $status, $data, self::extract_error( $data, $status ) );
+	}
 
 	/**
 	 * Get the account associated with the token. Used to verify the token + show plan/credits.
