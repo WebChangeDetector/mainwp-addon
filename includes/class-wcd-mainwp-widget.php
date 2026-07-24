@@ -37,6 +37,13 @@ class WCD_MainWP_Widget {
 			return;
 		}
 
+		// Signup activation pending: the metabox cannot be unregistered per-state, so its body shows
+		// ONLY the activate-account hint (no stats, no Run CTA).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			self::render_pending_activation_notice();
+			return;
+		}
+
 		$wcd_scope = WCD_MainWP_Bootstrap::resolve_banner_scope( false );
 		if ( null === $wcd_scope ) {
 			// No enabled sites (bulk) or this single site is not enabled for WCD: nudge the user to the
@@ -115,6 +122,34 @@ class WCD_MainWP_Widget {
 	}
 
 	/**
+	 * Render the "activate your account first" notice: the widget-body state while a signup
+	 * activation is pending. Shows ONLY the hint (no stats, no Run CTA); the Account tab hosts the
+	 * full activate-account panel.
+	 *
+	 * @return void
+	 */
+	protected static function render_pending_activation_notice(): void {
+		$account_url   = WCD_MainWP_Bootstrap::tab_url( 'account' );
+		$pending_email = WCD_MainWP_Site_Settings::pending_email();
+
+		self::render_widget_heading();
+		?>
+		<div class="wcd-empty-state">
+			<div class="ui info message"><p>
+				<?php
+				printf(
+					/* translators: 1: the signup email address, 2: Account tab URL. */
+					wp_kses_post( __( 'Activate your WebChange Detector account first: we sent an activation link to %1$s. Click it, then reload this page. Details on the <a href="%2$s">Account</a> tab.', 'webchangedetector-for-mainwp' ) ),
+					'<strong>' . esc_html( $pending_email ) . '</strong>',
+					esc_url( $account_url )
+				);
+				?>
+			</p></div>
+		</div>
+		<?php
+	}
+
+	/**
 	 * Render the safe-update entry point as a full-page panel for the Visual Checks "Run" tab.
 	 *
 	 * Same widget body as render_safe_update_metabox(), but tab-friendly: it owns the token and
@@ -143,6 +178,13 @@ class WCD_MainWP_Widget {
 				?>
 			</p></div>
 			<?php
+			return;
+		}
+
+		// Signup activation pending: only the activate-account hint (defensive; the extension page
+		// shell already forces the Account tab while pending, so this render is normally unreachable).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			self::render_pending_activation_notice();
 			return;
 		}
 

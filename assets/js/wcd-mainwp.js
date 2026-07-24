@@ -854,12 +854,22 @@
         return sites;
     }
 
-    // Site Updates subpage only (the inline bar marker exists there): keep the bar's buttons in
-    // sync with the native client-side tab switcher. "Update Selected with Checks" only where a
-    // checkbox table exists (plugins/themes; core and translations have none on this subpage,
-    // matching the native Selected buttons), both hidden on tabs we cannot safe-update
-    // (abandoned plugins/themes, database updates). Uses the `hidden` class like the native
-    // buttons (a small own CSS rule makes it stick against Fomantic's .ui.button display).
+    // The site Updates subpage's currently active tab name (data-tab). One resolution path for
+    // both the click-time type lookup and the bar's initial visibility: the native tab menu item
+    // first (scoped, immune to third-party .ui.tab elements), the active tab pane as fallback.
+    function activeSiteTabName() {
+        var active = document.querySelector('.select-individual-updates .item.active')
+            || document.querySelector('.ui.tab.active[data-tab]');
+        return active ? (active.getAttribute('data-tab') || '') : '';
+    }
+
+    // Site Updates subpage only (the inline bar marker exists there): keep the bar in sync with
+    // the native client-side tab switcher. On tabs we cannot safe-update (abandoned plugins/
+    // themes, database updates) the WHOLE bar hides; on updatable tabs "Update Selected with
+    // Checks" only shows where a checkbox table exists (plugins/themes; core and translations
+    // have none on this subpage, matching the native Selected buttons). Uses the `hidden` class
+    // like the native buttons (a small own CSS rule makes it stick against Fomantic's .ui.button
+    // display).
     function initSiteUpdatesBar() {
         var bar = document.querySelector('.wcd-updates-bar--inline');
         if (!bar) { return; }
@@ -869,6 +879,7 @@
         function applyTab(tabName) {
             var type = SITE_TAB_TYPES[tabName] || '';
             var hasCheckboxes = 'plugins' === tabName || 'themes' === tabName;
+            bar.classList.toggle('hidden', !type);
             if (selectedBtn) { selectedBtn.classList.toggle('hidden', !hasCheckboxes); }
             if (allBtn) { allBtn.classList.toggle('hidden', !type); }
         }
@@ -880,9 +891,7 @@
             if (item) { applyTab(item.getAttribute('data-tab') || ''); }
         });
 
-        var active = document.querySelector('.select-individual-updates .item.active')
-            || document.querySelector('.ui.tab.active[data-tab]');
-        applyTab(active ? (active.getAttribute('data-tab') || '') : '');
+        applyTab(activeSiteTabName());
     }
 
     function plural(n, one, many) { return 1 === n ? one : many; }
@@ -2161,12 +2170,14 @@
             var updatesScope;
             if (barSiteId) {
                 // Site Updates subpage: the tabs switch client-side (no reload), so the type
-                // resolves from the ACTIVE tab at click time. Unresolvable tabs (abandoned, db
-                // updates) degrade to a no-op alert, never a wrong-type run.
-                var activeTab = document.querySelector('.ui.tab.active[data-tab]');
-                updateType = activeTab ? (SITE_TAB_TYPES[activeTab.getAttribute('data-tab')] || '') : '';
+                // resolves from the ACTIVE tab at click time (same source as initSiteUpdatesBar).
+                // Unresolvable tabs (abandoned, db updates) degrade to a no-op alert, never a
+                // wrong-type run.
+                var tabName = activeSiteTabName();
+                updateType = SITE_TAB_TYPES[tabName] || '';
                 if (!updateType) { window.alert(t('noSelection')); return; }
                 if ('selected' === mode) {
+                    var activeTab = document.querySelector('.ui.tab.active[data-tab="' + tabName + '"]');
                     var siteSel = readUpdatesSelection(updatesRun, updateType, activeTab);
                     if (!Object.keys(siteSel).length) { window.alert(t('noSelection')); return; }
                     updatesScope = { update_type: updateType, mode: 'selected', selection: siteSel };

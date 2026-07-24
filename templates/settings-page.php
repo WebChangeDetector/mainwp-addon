@@ -76,6 +76,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 <?php endif; ?>
 
 <?php if ( '' !== $wcd_mainwp_pending_email ) : ?>
+	<h3 class="ui header"><?php esc_html_e( 'Activate your account', 'webchangedetector-for-mainwp' ); ?></h3>
 	<div class="ui info message">
 		<p>
 			<?php
@@ -88,6 +89,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 		</p>
 		<p><a href="<?php echo esc_url( WCD_MainWP_Bootstrap::tab_url( 'account' ) ); ?>"><?php esc_html_e( 'Reload this page', 'webchangedetector-for-mainwp' ); ?></a></p>
 	</div>
+	<p class="wcd-muted"><?php esc_html_e( 'Email never arrived? Check your spam folder, or reset the connection below and sign up again.', 'webchangedetector-for-mainwp' ); ?></p>
 <?php endif; ?>
 
 <?php if ( '' === $token ) : ?>
@@ -95,8 +97,8 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 		<div class="ui negative message"><p><?php echo esc_html( $wcd_mainwp_signup_error['message'] ); ?></p></div>
 	<?php endif; ?>
 
-	<h3 class="ui header"><?php esc_html_e( 'Start your free trial', 'webchangedetector-for-mainwp' ); ?></h3>
-	<p class="wcd-muted"><?php esc_html_e( 'Create your free WebChange Detector account right here. No credit card required.', 'webchangedetector-for-mainwp' ); ?></p>
+	<h3 class="ui header"><?php esc_html_e( 'Create your account', 'webchangedetector-for-mainwp' ); ?></h3>
+	<p class="wcd-muted"><?php esc_html_e( 'Create your WebChange Detector account right here. You start with a free trial, no credit card required.', 'webchangedetector-for-mainwp' ); ?></p>
 	<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wcd-signup-form">
 		<?php wp_nonce_field( 'wcd_signup' ); ?>
 		<input type="hidden" name="action" value="wcd_signup" />
@@ -123,11 +125,11 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 				<input type="password" id="wcd_signup_password" name="password" required minlength="6"
 						autocomplete="new-password" />
 			</div>
-			<button type="submit" class="ui primary button"><?php esc_html_e( 'Start your free trial', 'webchangedetector-for-mainwp' ); ?></button>
+			<button type="submit" class="ui primary button"><?php esc_html_e( 'Create account', 'webchangedetector-for-mainwp' ); ?></button>
 		</div>
 	</form>
 
-	<div class="ui horizontal divider"><?php esc_html_e( 'Already have an account?', 'webchangedetector-for-mainwp' ); ?></div>
+	<div class="ui horizontal divider wcd-signup-divider"><?php esc_html_e( 'Already have an account?', 'webchangedetector-for-mainwp' ); ?></div>
 <?php endif; ?>
 
 <?php if ( '' !== $token && ! empty( $account ) ) : ?>
@@ -168,6 +170,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 	</div>
 <?php endif; ?>
 
+<?php if ( '' === $wcd_mainwp_pending_email ) : ?>
 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wcd-token-form wcd-mt">
 	<?php wp_nonce_field( 'wcd_save_settings' ); ?>
 	<input type="hidden" name="action" value="wcd_save_settings" />
@@ -194,6 +197,7 @@ elseif ( '0' === $wcd_mainwp_verified_flag ) :
 		<button type="submit" class="ui primary button"><?php esc_html_e( 'Save & verify', 'webchangedetector-for-mainwp' ); ?></button>
 	</div>
 </form>
+<?php endif; ?>
 
 <?php if ( '' !== $token ) : ?>
 	<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wcd-reset-form wcd-mt">

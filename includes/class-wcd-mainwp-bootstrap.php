@@ -140,7 +140,7 @@ class WCD_MainWP_Bootstrap {
 			'id'            => 'wcd-safe-update-widget',
 			'plugin'        => WCD_MAINWP_PLUGIN_FILE,
 			'key'           => 'wcd_safe_update_widget',
-			'metabox_title' => 'WebChange Detector: Updates',
+			'metabox_title' => __( 'WebChange Detector: Updates', 'webchangedetector-for-mainwp' ),
 			'callback'      => array( 'WCD_MainWP_Widget', 'render_safe_update_metabox' ),
 			'layout'        => array( 0, 20, 12, 10 ),
 		);
@@ -208,7 +208,7 @@ class WCD_MainWP_Bootstrap {
 
 		return sprintf(
 			/* translators: %s: Account tab link. */
-			esc_html__( 'Create your free trial account or connect an existing one in the %s.', 'webchangedetector-for-mainwp' ),
+			esc_html__( 'Create your WebChange Detector account or connect an existing one in the %s. You start with a free trial, no credit card required.', 'webchangedetector-for-mainwp' ),
 			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Account tab', 'webchangedetector-for-mainwp' ) . '</a>'
 		);
 	}
@@ -226,7 +226,9 @@ class WCD_MainWP_Bootstrap {
 	 */
 	public static function render_updates_bar( $websites = null, $total = 0 ): void {
 		unset( $websites );
-		if ( '' === WCD_MainWP_Site_Settings::get_global() || (int) $total < 1 ) {
+		// is_ready(): silent no-op without a token AND while a signup activation is pending
+		// (nothing actionable may appear anywhere until the account is activated).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() || (int) $total < 1 ) {
 			return;
 		}
 
@@ -255,7 +257,8 @@ class WCD_MainWP_Bootstrap {
 	 * @param bool  $global_view  Whether the widget renders the global (all sites) view.
 	 */
 	public static function render_overview_card( $current_site = null, $global_view = true ): void {
-		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
+		// is_ready(): silent no-op without a token AND while a signup activation is pending.
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
 			return;
 		}
 
@@ -295,7 +298,8 @@ class WCD_MainWP_Bootstrap {
 	 */
 	public static function render_site_updates_bar( $active_tab = '' ): void {
 		unset( $active_tab );
-		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
+		// is_ready(): silent no-op without a token AND while a signup activation is pending.
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
 			return;
 		}
 

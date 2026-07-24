@@ -12,6 +12,7 @@ defined( 'ABSPATH' ) || exit;
 $wcd_mainwp_util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
 $wcd_mainwp_site_id = ( class_exists( $wcd_mainwp_util ) && method_exists( $wcd_mainwp_util, 'get_current_wpid' ) ) ? (int) $wcd_mainwp_util::get_current_wpid() : 0;
 $wcd_mainwp_token   = WCD_MainWP_Site_Settings::get_global();
+$wcd_mainwp_pending = WCD_MainWP_Site_Settings::pending_email();
 $wcd_mainwp_enabled = $wcd_mainwp_site_id && WCD_MainWP_Site_Map::is_enabled( $wcd_mainwp_site_id );
 // Token/account live on the extension page's Account tab; site enabling + URL selection on its
 // Settings tab.
@@ -31,6 +32,19 @@ $wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 				printf(
 					/* translators: %s: settings page URL. */
 					wp_kses_post( __( 'No API token configured. Add one in the <a href="%s">WebChange Detector Settings</a>.', 'webchangedetector-for-mainwp' ) ),
+					esc_url( $wcd_mainwp_account_page )
+				);
+				?>
+			</p>
+		</div>
+	<?php elseif ( '' !== $wcd_mainwp_pending ) : ?>
+		<div class="ui info message">
+			<p>
+				<?php
+				printf(
+					/* translators: 1: the signup email address, 2: Account tab URL. */
+					wp_kses_post( __( 'Activate your WebChange Detector account first: we sent an activation link to %1$s. Click it, then reload this page. Details on the <a href="%2$s">Account</a> tab.', 'webchangedetector-for-mainwp' ) ),
+					'<strong>' . esc_html( $wcd_mainwp_pending ) . '</strong>',
 					esc_url( $wcd_mainwp_account_page )
 				);
 				?>

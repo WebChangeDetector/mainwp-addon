@@ -166,10 +166,19 @@ Flow (`WCD_MainWP_Site_Settings::handle_signup()`, `admin_post_wcd_signup`, nonc
    (never the password) goes into the `wcd_mainwp_signup_error` transient (120s) and the form is
    re-shown.
 
-Pending state: while `wcd_mainwp_activation_pending` is set the extension page defaults to the
-Account tab, which shows a "we sent an activation link to {email}" notice and re-verifies the token
-once per load (`verify_token()`, whose result additively carries `status`): a 403 keeps the pending
-notice, success clears the flag and shows the "activated" notice plus the account cards. The
+Pending state (UI-wide gate): while `wcd_mainwp_activation_pending` is set, nothing actionable from
+the add-on appears anywhere in the MainWP UI. The shared readiness check is
+`WCD_MainWP_Site_Settings::is_ready()` (token AND not pending; cheap): the extension page shell
+forces the Account tab regardless of `?tab=` and hides the tab switcher; the Updates-page bars, the
+site Updates-subpage bar and the Updates Overview card render nothing (like their no-token no-op);
+the dashboard widget body, the Run panel and the per-site tab show only an activate-account hint.
+The Account tab shows the full "Activate your account" panel (email, reload link, spam/reset hint;
+the token form is hidden while pending, the reset-connection button stays as the escape hatch).
+Unlock: `refresh_pending_activation()` (memoized, one `/account` call per request via
+`verify_token()`, whose result additively carries `status`) runs in the page shell before the
+layout decision: a 403 keeps the pending state, success clears the flag on that same load, so the
+first reload after clicking the email link shows the "activated" notice, the account cards and the
+full tab bar. The
 activation email's return link targets the extension page
 (`admin.php?page=Extensions-Webchangedetector-For-Mainwp&tab=account`; keyed off
 `signup_source=mainwp` server-side, so renaming the plugin folder requires a coordinated API edit).
@@ -414,8 +423,9 @@ active because navigating away mid-UPDATES can interrupt a non-transactional upd
 
 The whole UI lives on the add-on's own **extension page** (MainWP > Extensions > WebChange Detector).
 `templates/admin-page.php` is the shell: it resolves the active tab from the `?tab=` query arg
-(`run` / `checks` / `settings` / `account`; default = **Account** when no token is configured OR a
-signup activation is pending, else **Run**), renders the MainWP extension chrome once (`mainwp_pageheader_extensions` /
+(`run` / `checks` / `settings` / `account`; default = **Account** when no token is configured, else
+**Run**; while a signup activation is pending the Account tab is FORCED regardless of `?tab=` and
+the switcher is hidden, see "Free trial signup"), renders the MainWP extension chrome once (`mainwp_pageheader_extensions` /
 `mainwp_pagefooter_extensions`), draws the tab switcher (`WCD_MainWP_Runs_View::render_tabs()`), and
 dispatches to the active tab body. Tabs switch via a **full page reload** (`?tab=...`); URLs are built
 by `WCD_MainWP_Bootstrap::tab_url()`. The full reload keeps the Run-tab safe-update resume/heartbeat

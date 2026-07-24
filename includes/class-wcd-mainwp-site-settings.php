@@ -136,10 +136,12 @@ class WCD_MainWP_Site_Settings {
 			return;
 		}
 
-		$token = self::get_global();
-		if ( '' === $token ) {
+		// is_ready(): also skip while a signup activation is pending; provisioning would only 403
+		// against the ActivateAccount gate and burn requests.
+		if ( ! self::is_ready() ) {
 			return;
 		}
+		$token = self::get_global();
 
 		try {
 			$result = WCD_MainWP_Site_Map::enable_site( $site_id, $token );
@@ -238,6 +240,65 @@ class WCD_MainWP_Site_Settings {
 	 */
 	public static function pending_email(): string {
 		return (string) WCD_MainWP_Options::get( self::PENDING_KEY, '' );
+	}
+
+	/**
+	 * Whether the add-on is ready to render working UI: a token is stored AND no signup activation
+	 * is pending. THE shared readiness gate for every UI entry point (extension page tabs, dashboard
+	 * widget, Run panel, Updates-page bars, Updates Overview card, per-site tab): while activation is
+	 * pending, nothing actionable may appear anywhere in the MainWP UI. Cheap (options only, no API
+	 * call); the AJAX handlers keep their own security model plus the friendly ActivateAccount error
+	 * mapping as the backstop.
+	 *
+	 * @return bool True when a token is stored and no activation is pending.
+	 */
+	public static function is_ready(): bool {
+		return '' !== self::get_global() && '' === self::pending_email();
+	}
+
+	/**
+	 * Re-verify a pending signup once per request and resolve the display state.
+	 *
+	 * Called by the extension page shell BEFORE it decides the layout (so the first load after the
+	 * emailed activation link unlocks the tabs immediately) and by render_settings_form() (memoized:
+	 * both share one /account call). No-op unless a token is stored AND the pending flag is set.
+	 *
+	 * @return array {
+	 *     @type string $pending_email  Email to show in the pending notice; '' when not pending or
+	 *                                  when the failure is not the activation gate (the flag then
+	 *                                  stays set, so the UI-wide gate keeps holding, but the caller
+	 *                                  shows the normal error path instead of the pending notice).
+	 *     @type bool   $just_activated Whether the pending signup was verified on this request.
+	 * }
+	 */
+	public static function refresh_pending_activation(): array {
+		static $memo = null;
+		if ( null !== $memo ) {
+			return $memo;
+		}
+
+		$token   = self::get_global();
+		$pending = self::pending_email();
+		$just    = false;
+
+		if ( '' !== $token && '' !== $pending ) {
+			$verify = self::verify_token( $token );
+			if ( $verify['ok'] ) {
+				WCD_MainWP_Options::delete( self::PENDING_KEY );
+				$pending = '';
+				$just    = true;
+			} elseif ( 403 !== $verify['status'] ) {
+				// Not the ActivateAccount gate (network/SSL/API error): show the normal error path.
+				$pending = '';
+			}
+		}
+
+		$memo = array(
+			'pending_email'  => $pending,
+			'just_activated' => $just,
+		);
+
+		return $memo;
 	}
 
 	/**
@@ -488,26 +549,15 @@ class WCD_MainWP_Site_Settings {
 	 * @return void
 	 */
 	public static function render_settings_form(): void {
-		$token   = self::get_global();
-		$account = array();
+		$token = self::get_global();
+		$state = self::refresh_pending_activation();
 
-		$wcd_mainwp_pending_email  = self::pending_email();
-		$wcd_mainwp_just_activated = false;
+		$wcd_mainwp_pending_email  = $state['pending_email'];
+		$wcd_mainwp_just_activated = $state['just_activated'];
 
-		if ( '' !== $token && '' !== $wcd_mainwp_pending_email ) {
-			$verify = self::verify_token( $token );
-			if ( $verify['ok'] ) {
-				WCD_MainWP_Options::delete( self::PENDING_KEY );
-				$wcd_mainwp_pending_email  = '';
-				$wcd_mainwp_just_activated = true;
-				$account                   = $verify['account'];
-			} elseif ( 403 !== $verify['status'] ) {
-				// Not the activation gate: show the normal "could not retrieve account" path.
-				$wcd_mainwp_pending_email = '';
-			}
-		} elseif ( '' !== $token ) {
-			$account = self::get_account();
-		}
+		// Cache-first; right after activation verify_token() already re-filled the cache, so this
+		// never adds a second /account call to the request.
+		$account = ( '' !== $token && '' === self::pending_email() ) ? self::get_account() : array();
 
 		$map = WCD_MainWP_Site_Map::all();
 

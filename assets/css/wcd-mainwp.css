@@ -43,6 +43,30 @@
 .wcd-w-100 { width: 100%; }
 
 /* ── Account/credits (host .ui.cards on the Account tab; only labels/values here) ─ */
+/* Signup + token forms and the divider between them: cap the width so the inputs do not
+   stretch across the whole extension page (the cards above stay full width). */
+.wcd-signup-form,
+.wcd-signup-divider,
+.wcd-token-form { max-width: 600px; }
+/* MainWP's dark theme styles inputs via an attribute-selector list that omits type="email"
+   (mainwp-default-dark-theme.css: text/search/file/number/password/color are covered, email is
+   not, and our bare .field inputs have no .ui.input wrapper to catch it). Mirror that rule's
+   declaration block verbatim for our email input, scoped to the same .mainwp-custom-theme class
+   so the light theme is untouched. The theme has no :focus overrides; the !important background
+   also wins over Fomantic's focus style, exactly like the covered input types. */
+.mainwp-ui.mainwp-custom-theme .wcd-signup-form .ui.form input[type="email"] {
+	background-color: var(--mainwp-element-background-secondary) !important;
+	border: 1px solid var(--mainwp-border) !important;
+	border-radius: var(--input-radius) !important;
+	-webkit-border-radius: var(--input-radius) !important;
+	color: var(--mainwp-text);
+}
+/* Separate concern from the theme gap above: Chrome/WebKit paint their own light background on
+   autofilled fields via UA styles in BOTH themes; a background rule cannot override it, the
+   endless transition keeps the theme's input colors instead. */
+.wcd-signup-form input:-webkit-autofill,
+.wcd-signup-form input:-webkit-autofill:hover,
+.wcd-signup-form input:-webkit-autofill:focus { transition: background-color 9999s ease-in-out 0s, color 9999s ease-in-out 0s; }
 .wcd-account-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--wcd-muted); margin-top: 6px; }
 .wcd-account-value { font-size: 20px; font-weight: 700; }
 /* First label in a card has the card padding above it already, so drop the extra top margin. */
@@ -108,8 +132,10 @@
 .wcd-updates-bar__label { display: inline-flex; align-items: center; gap: 8px; }
 /* Tab-dependent visibility on the site subpage uses the native `hidden` class convention; WP
    core's bare `.hidden` rule loses the specificity race against Fomantic's `.ui.button`
-   display, so pin it for our two buttons. */
-.wcd-updates-bar .wcd-updates-run.hidden { display: none; }
+   display, so pin it for our two buttons and for the whole inline bar (hidden entirely on
+   tabs that cannot be safe-updated). */
+.wcd-updates-bar .wcd-updates-run.hidden,
+.wcd-updates-bar--inline.hidden { display: none; }
 
 #mainwp-manage-updates .mainwp-actions-bar.wcd-updates-bar { margin-left: 0 !important; margin-right: 0 !important; margin-top: 0 !important; }
 
