@@ -15,3 +15,5 @@ scripts
 .DS_Store
 .github
 .claude
+build
+*.zip

@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish add-on zip
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches the plugin version
+        run: |
+          set -eu
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          # The pre-release suffix MUST be part of the pattern. A bare [0-9.]+ would
+          # truncate "1.1.0-beta.1" to "1.1.0" and let a mismatched tag pass.
+          HEADER_VERSION="$(grep -oP '^\s*\*\s*Version:\s*\K[0-9]+(\.[0-9]+)*(-[A-Za-z0-9.]+)?' webchangedetector-for-mainwp.php | head -n1)"
+
+          echo "Tag version:    ${TAG_VERSION}"
+          echo "Header version: ${HEADER_VERSION}"
+
+          if [ -z "${HEADER_VERSION}" ]; then
+            echo "::error::Could not read the 'Version:' header from webchangedetector-for-mainwp.php"
+            exit 1
+          fi
+
+          if [ "${TAG_VERSION}" != "${HEADER_VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match the plugin header version ${HEADER_VERSION}"
+            exit 1
+          fi
+
+          case "${TAG_VERSION}" in
+            *-*)
+              # Pre-release (alpha/beta/rc): "Stable tag" must keep pointing at the
+              # last real stable release, so it is deliberately NOT checked here.
+              echo "Pre-release tag detected: skipping the readme.txt 'Stable tag' check."
+              ;;
+            *)
+              STABLE_TAG="$(grep -oP '^Stable tag:\s*\K\S+' readme.txt | head -n1)"
+              echo "Stable tag:     ${STABLE_TAG}"
+              if [ "${STABLE_TAG}" != "${TAG_VERSION}" ]; then
+                echo "::error::readme.txt 'Stable tag: ${STABLE_TAG}' does not match tag ${TAG_VERSION}"
+                exit 1
+              fi
+              ;;
+          esac
+
+      - name: Build distribution zip
+        run: |
+          set -eu
+          rm -rf build webchangedetector-for-mainwp.zip
+          mkdir -p build/webchangedetector-for-mainwp
+
+          # .distignore is the single source of truth for what ships.
+          rsync -a --delete --exclude-from='.distignore' ./ build/webchangedetector-for-mainwp/
+
+          # Exactly one top-level folder, named like the plugin slug.
+          ( cd build && zip -rq ../webchangedetector-for-mainwp.zip webchangedetector-for-mainwp )
+
+          echo "--- Zip contents ---"
+          unzip -l webchangedetector-for-mainwp.zip
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: webchangedetector-for-mainwp.zip
+          generate_release_notes: true

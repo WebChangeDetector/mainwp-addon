@@ -416,6 +416,17 @@ class WCD_MainWP_Bootstrap {
 	}
 
 	/**
+	 * Public wrapper around on_our_page() so callers outside the class (the
+	 * beta-channel admin notice in the main plugin file) can reuse the same
+	 * screen gating instead of duplicating the $GLOBALS['plugin_page'] logic.
+	 *
+	 * @return bool True when the current admin request is one of the add-on's pages.
+	 */
+	public static function is_on_our_page(): bool {
+		return self::on_our_page();
+	}
+
+	/**
 	 * Whether the current admin request is one of the add-on's pages.
 	 *
 	 * @return bool True when our CSS/JS should load on this page.

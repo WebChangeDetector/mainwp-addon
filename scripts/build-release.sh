@@ -6,8 +6,9 @@
 # Builds a clean, distributable copy of the plugin (analogous to the WP plugin
 # deployment script in wcd-plugin/scripts/deploy-to-wp-svn.sh):
 #
-#   1. Validates version consistency across plugin header, version constant,
-#      readme.txt stable tag and the latest changelog entry.
+#   1. Validates version consistency across the plugin header, the readme.txt
+#      stable tag and the latest changelog entry (the version is derived from
+#      the header at runtime, so there is no separate version constant).
 #   2. Validates the Git working directory.
 #   3. Syncs a clean copy (excludes from .distignore + junk files) to
 #      ../wp-repo-mainwp/trunk/ (same layout as wp-repo-plugin, SVN-ready).
@@ -215,21 +216,6 @@ get_plugin_version() {
     echo "$version"
 }
 
-# Extract version from the WCD_MAINWP_VERSION constant
-get_constant_version() {
-    local version=$(grep "define( 'WCD_MAINWP_VERSION'" "$MAIN_PLUGIN_FILE" | sed "s/.*'WCD_MAINWP_VERSION', *'\([^']*\)'.*/\1/" | tr -d '\r' | tr -d ' ')
-
-    if [ -z "$version" ]; then
-        exit_error "Could not extract WCD_MAINWP_VERSION constant from $MAIN_PLUGIN_FILE"
-    fi
-
-    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        exit_error "Invalid version format in WCD_MAINWP_VERSION constant: '$version' (expected X.Y.Z)"
-    fi
-
-    echo "$version"
-}
-
 # Extract stable tag from readme.txt
 get_readme_stable_tag() {
     local version=$(grep -i "^Stable tag:" "$README_FILE" | awk '{print $3}' | tr -d '\r' | tr -d ' ')
@@ -269,26 +255,22 @@ get_readme_changelog_version() {
     echo "$version"
 }
 
-# Validate version consistency across all four sources
+# Validate version consistency across the plugin header, the readme.txt stable
+# tag and the latest changelog entry. The version is derived from the header at
+# runtime (no separate WCD_MAINWP_VERSION literal), so there is no constant to
+# cross-check here.
 validate_versions() {
     print_header "Validating Version Consistency"
 
     local plugin_version=$(get_plugin_version)
-    local constant_version=$(get_constant_version)
     local readme_stable=$(get_readme_stable_tag)
     local changelog_version=$(get_readme_changelog_version)
 
     print_info "Plugin file version:       $plugin_version"
-    print_info "WCD_MAINWP_VERSION const:  $constant_version"
     print_info "readme.txt stable tag:     $readme_stable"
     print_info "Changelog version:         $changelog_version"
 
     local versions_match=true
-
-    if [ "$plugin_version" != "$constant_version" ]; then
-        print_error "Version mismatch: Plugin file ($plugin_version) != WCD_MAINWP_VERSION constant ($constant_version)"
-        versions_match=false
-    fi
 
     if [ "$plugin_version" != "$readme_stable" ]; then
         print_error "Version mismatch: Plugin file ($plugin_version) != readme.txt stable tag ($readme_stable)"

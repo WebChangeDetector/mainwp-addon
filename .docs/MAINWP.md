@@ -43,7 +43,7 @@ distribution. No API call is ever made before the user has configured a token (g
 
 ```
 webchangedetector-for-mainwp/
-├── webchangedetector-for-mainwp.php  # Entry: full wp.org header + constants (WCD_MAINWP_VERSION, *_FILE/_PATH/_URL)
+├── webchangedetector-for-mainwp.php  # Entry: full wp.org + Git Updater header; version derived from the header into WCD_MAINWP_VERSION; *_FILE/_PATH/_URL constants; dev-branch opt-in + beta notice
 ├── uninstall.php                  # Cleans options + transients (token, site map, auto-enable, caches)
 ├── readme.txt                     # wordpress.org readme (external-service disclosure, FAQ, changelog)
 ├── .distignore                    # Files excluded from the wp.org distribution
@@ -488,16 +488,64 @@ The client reads `WCD_API_URL` first, then `WCD_API_URL_V2`, then the production
 `wp-env start` after changing the override. Note: wp-env runs in Docker, so the override host must be
 resolvable + reachable from inside the container.
 
-## Release / Build
+## Release & Distribution
 
-The version lives in **four** places that must always match (the build script enforces this):
-the `Version:` plugin header and the `WCD_MAINWP_VERSION` constant (both in
-`webchangedetector-for-mainwp.php`), the `Stable tag:` in `readme.txt`, and the latest
-`= X.Y.Z =` changelog entry in `readme.txt`. NEVER change version numbers without asking first.
+Two independent channels ship the add-on, mirroring the customer WP plugin:
 
-`scripts/build-release.sh` (modeled on `wcd-plugin/scripts/deploy-to-wp-svn.sh`) validates the
-versions and the Git status, then rsyncs a clean copy (excludes from `.distignore` + junk like
-`.DS_Store`) to `/Users/mike/htdocs/wcd/wp-repo-mainwp/trunk/` (same layout as `wp-repo-plugin`:
+- **Stable channel (customers): wordpress.org SVN.** The published listing, updated by
+  `scripts/build-release.sh` (see below). Ships stable `X.Y.Z` versions only.
+- **Dev/beta channel (dev + staging sites): GitHub + Git Updater.** A tag push builds a
+  GitHub release zip that the [Git Updater](https://git-updater.com/) plugin serves as an
+  update on sites that opt in. Used for pre-releases (`X.Y.Z-beta.N`) and dev-branch testing;
+  wordpress.org customers never see these.
+
+### Version: single source of truth (the header)
+
+The version lives in the `Version:` plugin header of `webchangedetector-for-mainwp.php` and is
+derived from it at runtime into the `WCD_MAINWP_VERSION` constant via `get_file_data()` (there
+is no separate literal to keep in sync). Three places still have to match for a stable
+wordpress.org release, and `scripts/build-release.sh` enforces it: the `Version:` header, the
+`Stable tag:` in `readme.txt`, and the latest `= X.Y.Z =` changelog entry in `readme.txt`. NEVER
+change version numbers without asking first.
+
+### Git Updater setup on a dev/staging site
+
+1. Install the Git Updater plugin on the site.
+2. The add-on header declares `GitHub Plugin URI: https://github.com/WebChangeDetector/mainwp-addon`
+   and `Primary Branch: main`, so Git Updater tracks published releases/tags by default. There is
+   deliberately **no** `Update URI:` header (that would cut wordpress.org customers off from
+   normal plugin updates).
+3. To follow the `dev` branch instead of tagged releases, add
+   `define( 'WCD_MAINWP_USE_DEV_BRANCH', true );` to `wp-config.php`. This is an explicit,
+   per-site opt-in: with it on, a `gu_primary_branch` filter points Git Updater at `dev` and a
+   warning admin notice is shown on the add-on's pages. There is **no** auto-detection (an earlier
+   approach enabled the beta channel whenever Git Updater was merely installed, silently serving
+   dev code to every such site).
+
+### `scripts/wcd-mainwp-release.sh` (dev/beta channel)
+
+Interactive, BSD/macOS-safe release cutter (port of the WP plugin's `bin/wcd-release.sh`). It
+bumps the `Version:` header (and, for a stable target only, `readme.txt` `Stable tag:`; a
+`-beta.N` target leaves `Stable tag:` untouched), commits, creates an annotated tag `vX.Y.Z[-beta.N]`,
+and pushes to `origin/dev --follow-tags`, then verifies the tag on origin. Forms: bare (menu:
+next pre-release / final / custom), an explicit `<version>`, or `--next` (increment the current
+pre-release counter); plus `--dry-run` and `--yes`. It expects branch `dev` (warns otherwise) and
+**never touches wp.org SVN or `wp-repo-mainwp/`**. Lives in `scripts/` (excluded from the dist by
+`.distignore`).
+
+### `.github/workflows/release.yml` (dev/beta channel)
+
+Triggered by a `v*` tag push. Verifies the tag matches the `Version:` header (pre-release-suffix
+aware); for a stable tag it also checks `readme.txt` `Stable tag:` (skipped for pre-release tags).
+Builds the zip with `rsync -a --delete --exclude-from='.distignore'` into a single top-level
+`webchangedetector-for-mainwp/` folder and publishes it via `softprops/action-gh-release@v2` with
+auto-generated release notes. Git Updater on opted-in sites picks the release up.
+
+### `scripts/build-release.sh` (stable wordpress.org channel)
+
+Validates version consistency (header ↔ `Stable tag:` ↔ changelog; strict `X.Y.Z`, stable only)
+and the Git status, then rsyncs a clean copy (excludes from `.distignore` + junk like `.DS_Store`)
+to `/Users/mike/htdocs/wcd/wp-repo-mainwp/trunk/` (same layout as `wp-repo-plugin`:
 trunk/tags/assets/branches). It then asks interactively whether to create the upload zip
 (`wp-repo-mainwp/webchangedetector-for-mainwp-X.Y.Z.zip`, top-level folder = plugin slug),
 whether to create the Git tag `vX.Y.Z`, and whether to deploy to WordPress.org SVN.
@@ -514,9 +562,9 @@ tags/branches/assets scaffold at the repo root are never committed), copies `tru
 username is prompted (or passed via `--svn-user <name>`); under `--force` with no `--svn-user`
 SVN's cached credentials are used. The zip can still be uploaded manually as a fallback.
 
-**Claude Code restrictions:** NEVER run `scripts/build-release.sh` for a real build or SVN
-deploy (deploy blacklist; `--dry-run` for verification is OK when asked). NEVER create or push
-Git tags or run `svn commit`.
+**Claude Code restrictions:** NEVER run `scripts/build-release.sh` or `scripts/wcd-mainwp-release.sh`
+for a real build/release (deploy blacklist; `--dry-run` for verification is OK when asked). NEVER
+create or push Git tags, run `svn commit`, or push to origin.
 
 ## Related Documentation
 

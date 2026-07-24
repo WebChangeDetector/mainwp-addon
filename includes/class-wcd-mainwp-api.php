@@ -101,6 +101,10 @@ class WCD_MainWP_API {
 					'Authorization' => 'Bearer ' . $api_token,
 					'Accept'        => 'application/json',
 					'Content-Type'  => 'application/json',
+					// Frontend origin of the request (API request attribution). Additive/optional:
+					// the API treats it as pure attribution with no side effects, independent of the
+					// intentionally omitted x-wcd-plugin above. Always 'mainwp' for this add-on.
+					'x-wcd-source'  => 'mainwp',
 				),
 				$headers
 			),
