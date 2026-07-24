@@ -7,7 +7,7 @@
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Requires Plugins:  mainwp
- * GitHub Plugin URI: https://github.com/WebChangeDetector/mainwp-addon
+ * GitHub Plugin URI: https://github.com/WebChangeDetector/webchangedetector-for-mainwp
  * Primary Branch:    main
  * Author:            Mike Miler
  * Author URI:        https://www.webchangedetector.com/
@@ -79,12 +79,15 @@ if ( ! defined( 'WCD_MAINWP_USE_DEV_BRANCH' ) ) {
  */
 function wcd_mainwp_set_git_updater_branch( $branch, $slug ) {
 	// Only apply to our add-on. Git Updater passes the REPOSITORY slug (the last
-	// segment of the "GitHub Plugin URI" header, "mainwp-addon"), which differs
-	// from the plugin directory name ("webchangedetector-for-mainwp") for this
-	// add-on. Match both so the override fires whichever identifier is passed;
-	// both uniquely identify this add-on and the filter is only registered under
-	// the explicit WCD_MAINWP_USE_DEV_BRANCH opt-in.
-	if ( ! in_array( $slug, array( 'mainwp-addon', 'webchangedetector-for-mainwp' ), true ) ) {
+	// segment of the "GitHub Plugin URI" header). After the repo rename the repo
+	// slug equals the plugin directory name ("webchangedetector-for-mainwp"), so
+	// that is the canonical value. The old repo slug "mainwp-addon" is kept only
+	// as a legacy fallback for sites still polling the old repo name during the
+	// rename redirect window, and can be removed later. Match both so the
+	// override fires whichever identifier is passed; both uniquely identify this
+	// add-on and the filter is only registered under the explicit
+	// WCD_MAINWP_USE_DEV_BRANCH opt-in.
+	if ( ! in_array( $slug, array( 'webchangedetector-for-mainwp', 'mainwp-addon' ), true ) ) {
 		return $branch;
 	}
 

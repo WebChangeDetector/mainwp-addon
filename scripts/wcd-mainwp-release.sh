@@ -605,4 +605,4 @@ fi
 
 echo
 echo "Pushed ${TAG} (verified on origin). GitHub Actions is now building and publishing the release zip:"
-echo "  https://github.com/WebChangeDetector/mainwp-addon/actions"
+echo "  https://github.com/WebChangeDetector/webchangedetector-for-mainwp/actions"

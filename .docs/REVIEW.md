@@ -22,12 +22,15 @@ Rules for implementing and reviewing the WebChange Detector MainWP add-on. Archi
   auto-detection of Git Updater (that once served dev code to every site with Git Updater
   installed). The `gu_primary_branch` filter and the beta admin notice are registered ONLY when the
   constant is true.
-- **The `gu_primary_branch` filter must match the GitHub REPO slug, not the plugin directory
-  name.** Git Updater passes the repository slug (the last segment of the `GitHub Plugin URI`
-  header), which is `mainwp-addon` for this add-on, NOT the plugin directory `webchangedetector-for-mainwp`.
-  The two differ here (unlike the WP plugin, where repo == directory == `webchangedetector`), so
-  `wcd_mainwp_set_git_updater_branch()` matches BOTH (`in_array( $slug, array( 'mainwp-addon',
-  'webchangedetector-for-mainwp' ), true )`). Matching only the directory name silently never fires.
+- **The `gu_primary_branch` filter must match the GitHub REPO slug.** Git Updater passes the
+  repository slug (the last segment of the `GitHub Plugin URI` header). After the repo rename the
+  repo slug equals the plugin directory name `webchangedetector-for-mainwp` (repo == directory ==
+  slug, exactly like the WP plugin `webchangedetector`), so that is the canonical value.
+  `wcd_mainwp_set_git_updater_branch()` matches BOTH (`in_array( $slug, array(
+  'webchangedetector-for-mainwp', 'mainwp-addon' ), true )`): the canonical slug plus the old
+  `mainwp-addon` repo slug kept only as a legacy fallback for sites still polling the old repo name
+  during the rename redirect window (removable later). Matching only one silently never fires for
+  the other identifier.
 - **Beta tags do NOT move `Stable tag:`.** A `-beta.N`/`-rc.N`/`-alpha.N` release bumps only the
   `Version:` header; `readme.txt` `Stable tag:` keeps pointing at the last stable release.
 - **`scripts/wcd-mainwp-release.sh` never touches wp.org SVN or `wp-repo-mainwp/`.** It only bumps

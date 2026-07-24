@@ -572,7 +572,7 @@ change version numbers without asking first.
 ### Git Updater setup on a dev/staging site
 
 1. Install the Git Updater plugin on the site.
-2. The add-on header declares `GitHub Plugin URI: https://github.com/WebChangeDetector/mainwp-addon`
+2. The add-on header declares `GitHub Plugin URI: https://github.com/WebChangeDetector/webchangedetector-for-mainwp`
    and `Primary Branch: main`, so Git Updater tracks published releases/tags by default. There is
    deliberately **no** `Update URI:` header (that would cut wordpress.org customers off from
    normal plugin updates).
