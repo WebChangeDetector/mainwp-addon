@@ -78,8 +78,13 @@ if ( ! defined( 'WCD_MAINWP_USE_DEV_BRANCH' ) ) {
  * @return string The branch to use for updates.
  */
 function wcd_mainwp_set_git_updater_branch( $branch, $slug ) {
-	// Only apply to our add-on.
-	if ( 'webchangedetector-for-mainwp' !== $slug ) {
+	// Only apply to our add-on. Git Updater passes the REPOSITORY slug (the last
+	// segment of the "GitHub Plugin URI" header, "mainwp-addon"), which differs
+	// from the plugin directory name ("webchangedetector-for-mainwp") for this
+	// add-on. Match both so the override fires whichever identifier is passed;
+	// both uniquely identify this add-on and the filter is only registered under
+	// the explicit WCD_MAINWP_USE_DEV_BRANCH opt-in.
+	if ( ! in_array( $slug, array( 'mainwp-addon', 'webchangedetector-for-mainwp' ), true ) ) {
 		return $branch;
 	}
 
