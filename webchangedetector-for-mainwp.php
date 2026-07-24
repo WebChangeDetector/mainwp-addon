@@ -3,7 +3,7 @@
  * Plugin Name:       WebChange Detector for MainWP
  * Plugin URI:        https://www.webchangedetector.com/mainwp/
  * Description:       Visual checks for MainWP updates: capture before/after screenshots around your updates and instantly see what changed.
- * Version:           1.1.0-beta.2
+ * Version:           1.1.0-beta.3
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Requires Plugins:  mainwp
