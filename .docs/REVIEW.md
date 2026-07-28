@@ -89,3 +89,4 @@ Rules for implementing and reviewing the WebChange Detector MainWP add-on. Archi
 - No edits to the `wp-repo-mainwp` deployment folder (see Paths).
 - No AI model names or internal crop URLs in any user-facing surface (the API strips these server-side; keep them out of templates/JS too).
 - No new dependency on undocumented MainWP internals without a guarded fallback.
+- **Never read the `WCD_API_URL` constant in this add-on.** In the WCD ecosystem it conventionally holds the customer WP plugin's v1 API base (`.../api/v1/`); adopting it as the v2 base breaks every call (e.g. `GET /account` 404s, there is no v1 route). The only supported API base override is `WCD_API_URL_V2` (web root: `WCD_API_URL_WEB`).

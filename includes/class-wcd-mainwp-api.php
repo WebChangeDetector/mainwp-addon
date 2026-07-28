@@ -53,16 +53,14 @@ class WCD_MainWP_API {
 	);
 
 	/**
-	 * Resolve the API base URL. Supports both override constants (WCD_API_URL and the
-	 * historical WCD_API_URL_V2 used by .wp-env.json). Trailing slash is trimmed.
+	 * Resolve the API base URL. The only supported override constant is WCD_API_URL_V2;
+	 * trailing slash is trimmed. WCD_API_URL is deliberately ignored: in the WCD ecosystem
+	 * that constant holds the customer WP plugin's v1 API base, so reading it here would
+	 * point this v2 client at a v1 URL.
 	 *
 	 * @return string The resolved API base URL.
 	 */
 	protected static function get_api_url(): string {
-		if ( defined( 'WCD_API_URL' ) && WCD_API_URL ) {
-			return rtrim( WCD_API_URL, '/' );
-		}
-
 		if ( defined( 'WCD_API_URL_V2' ) && WCD_API_URL_V2 ) {
 			return rtrim( WCD_API_URL_V2, '/' );
 		}

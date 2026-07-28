@@ -118,8 +118,8 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 ## API Communication
 
 Client: `WCD_MainWP_API` (`includes/class-wcd-mainwp-api.php`), all static. Base URL
-`https://api.webchangedetector.com/api/v2`, overridable via the `WCD_API_URL` **or** `WCD_API_URL_V2`
-constant. Auth: `Authorization: Bearer {token}`; also sends `x-wcd-source: mainwp` (deliberately NOT
+`https://api.webchangedetector.com/api/v2`, overridable via the `WCD_API_URL_V2` constant only
+(`WCD_API_URL` is deliberately ignored: that name means the customer WP plugin's v1 base). Auth: `Authorization: Bearer {token}`; also sends `x-wcd-source: mainwp` (deliberately NOT
 `x-wcd-plugin`, see the client's header comment). Every method returns
 `['ok'=>bool,'status'=>int,'data'=>mixed,'error'=>string]`. Web-root endpoints outside `/api/v2`
 (currently only the trial signup) resolve via `get_web_url()` (`WCD_API_URL_WEB` override, default
@@ -537,7 +537,7 @@ set to `http://api.webchangedetector.test/api/v2/`):
 { "config": { "WCD_API_URL_V2": "http://api.webchangedetector.test/api/v2/" } }
 ```
 
-The client reads `WCD_API_URL` first, then `WCD_API_URL_V2`, then the production default. For the
+The client reads `WCD_API_URL_V2`, then falls back to the production default. For the
 trial signup (a web-root endpoint outside `/api/v2`), add `WCD_API_URL_WEB` to the same override:
 
 ```json
