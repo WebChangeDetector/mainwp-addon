@@ -554,7 +554,8 @@ so signup still succeeds when it cannot).
 Two independent channels ship the add-on, mirroring the customer WP plugin:
 
 - **Stable channel (customers): wordpress.org SVN.** The published listing, updated by
-  `scripts/build-release.sh` (see below). Ships stable `X.Y.Z` versions only.
+  `.claude/bin/build-release.sh` from the private wcd-ops repo (see below). Ships stable
+  `X.Y.Z` versions only.
 - **Dev/beta channel (dev + staging sites): GitHub + Git Updater.** A tag push builds a
   GitHub release zip that the [Git Updater](https://git-updater.com/) plugin serves as an
   update on sites that opt in. Used for pre-releases (`X.Y.Z-beta.N`) and dev-branch testing;
@@ -565,7 +566,7 @@ Two independent channels ship the add-on, mirroring the customer WP plugin:
 The version lives in the `Version:` plugin header of `webchangedetector-for-mainwp.php` and is
 derived from it at runtime into the `WCD_MAINWP_VERSION` constant via `get_file_data()` (there
 is no separate literal to keep in sync). Three places still have to match for a stable
-wordpress.org release, and `scripts/build-release.sh` enforces it: the `Version:` header, the
+wordpress.org release, and `.claude/bin/build-release.sh` enforces it: the `Version:` header, the
 `Stable tag:` in `readme.txt`, and the latest `= X.Y.Z =` changelog entry in `readme.txt`. NEVER
 change version numbers without asking first.
 
@@ -583,16 +584,18 @@ change version numbers without asking first.
    approach enabled the beta channel whenever Git Updater was merely installed, silently serving
    dev code to every such site).
 
-### `scripts/wcd-mainwp-release.sh` (dev/beta channel)
+### `.claude/bin/wcd-release.sh mainwp` (dev/beta channel)
 
-Interactive, BSD/macOS-safe release cutter (port of the WP plugin's `bin/wcd-release.sh`). It
-bumps the `Version:` header (and, for a stable target only, `readme.txt` `Stable tag:`; a
-`-beta.N` target leaves `Stable tag:` untouched), commits, creates an annotated tag `vX.Y.Z[-beta.N]`,
-and pushes to `origin/dev --follow-tags`, then verifies the tag on origin. Forms: bare (menu:
-next pre-release / final / custom), an explicit `<version>`, or `--next` (increment the current
-pre-release counter); plus `--dry-run` and `--yes`. It expects branch `dev` (warns otherwise) and
-**never touches wp.org SVN or `wp-repo-mainwp/`**. Lives in `scripts/` (excluded from the dist by
-`.distignore`).
+Interactive, BSD/macOS-safe release cutter. Unified script for all WCD plugins: the first
+argument (`mainwp`) picks this add-on via `targets.conf` (plugin dir, plugin file, readme,
+release branch, GitHub repo slug). It bumps the `Version:` header (and, for a stable target
+only, `readme.txt` `Stable tag:`; a `-beta.N` target leaves `Stable tag:` untouched), commits,
+creates an annotated tag `vX.Y.Z[-beta.N]`, and pushes to `origin/dev --follow-tags`, then
+verifies the tag on origin. Forms: bare (menu: next pre-release / final / custom), an explicit
+`<version>`, or `--next` (increment the current pre-release counter); plus `--dry-run` and
+`--yes`. It expects branch `dev` (warns otherwise) and **never touches wp.org SVN or
+`wp-repo-mainwp/`**. Lives in the private wcd-ops repo at `/Users/mike/htdocs/wcd/.claude/bin/`,
+not in this public repo.
 
 ### `.github/workflows/release.yml` (dev/beta channel)
 
@@ -602,7 +605,10 @@ Builds the zip with `rsync -a --delete --exclude-from='.distignore'` into a sing
 `webchangedetector-for-mainwp/` folder and publishes it via `softprops/action-gh-release@v2` with
 auto-generated release notes. Git Updater on opted-in sites picks the release up.
 
-### `scripts/build-release.sh` (stable wordpress.org channel)
+### `.claude/bin/build-release.sh` (stable wordpress.org channel)
+
+Also lives in the private wcd-ops repo (`/Users/mike/htdocs/wcd/.claude/bin/`), not in this
+public repo.
 
 Validates version consistency (header ↔ `Stable tag:` ↔ changelog; strict `X.Y.Z`, stable only)
 and the Git status, then rsyncs a clean copy (excludes from `.distignore` + junk like `.DS_Store`)
@@ -623,9 +629,9 @@ tags/branches/assets scaffold at the repo root are never committed), copies `tru
 username is prompted (or passed via `--svn-user <name>`); under `--force` with no `--svn-user`
 SVN's cached credentials are used. The zip can still be uploaded manually as a fallback.
 
-**Claude Code restrictions:** NEVER run `scripts/build-release.sh` or `scripts/wcd-mainwp-release.sh`
-for a real build/release (deploy blacklist; `--dry-run` for verification is OK when asked). NEVER
-create or push Git tags, run `svn commit`, or push to origin.
+**Claude Code restrictions:** NEVER run `.claude/bin/build-release.sh` or
+`.claude/bin/wcd-release.sh mainwp` for a real build/release (deploy blacklist; `--dry-run` for
+verification is OK when asked). NEVER create or push Git tags, run `svn commit`, or push to origin.
 
 ## Related Documentation
 

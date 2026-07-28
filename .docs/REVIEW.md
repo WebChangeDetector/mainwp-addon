@@ -5,17 +5,20 @@ Rules for implementing and reviewing the WebChange Detector MainWP add-on. Archi
 ## Paths & deployment boundary
 
 - **Working copy (edit here):** `/Users/mike/htdocs/wcd/mainwp/app/public/wp-content/plugins/webchangedetector-for-mainwp/`.
-- **NEVER edit** `/Users/mike/htdocs/wcd/wp-repo-mainwp/`: it is the generated wordpress.org distribution, produced by `scripts/build-release.sh` (rsync minus `.distignore`). Any change there is overwritten on the next build.
+- **NEVER edit** `/Users/mike/htdocs/wcd/wp-repo-mainwp/`: it is the generated wordpress.org distribution, produced by `.claude/bin/build-release.sh` (private wcd-ops repo; rsync minus `.distignore`). Any change there is overwritten on the next build.
 
 ## Release & versioning
 
 - **Version is derived from the plugin header, single source.** `WCD_MAINWP_VERSION` is computed
   from the `Version:` header of `webchangedetector-for-mainwp.php` via `get_file_data()`. Never
   reintroduce a hardcoded `define( 'WCD_MAINWP_VERSION', 'X.Y.Z' )` literal. For a stable
-  wordpress.org release three places must match (enforced by `scripts/build-release.sh`): the
-  `Version:` header, `readme.txt` `Stable tag:`, and the latest `= X.Y.Z =` changelog entry.
-- **Two channels.** wordpress.org SVN (stable, customers) via `scripts/build-release.sh`; GitHub +
-  Git Updater (dev/beta, opt-in sites) via `scripts/wcd-mainwp-release.sh` + `.github/workflows/release.yml`.
+  wordpress.org release three places must match (enforced by `.claude/bin/build-release.sh` in the
+  private wcd-ops repo): the `Version:` header, `readme.txt` `Stable tag:`, and the latest
+  `= X.Y.Z =` changelog entry.
+- **Two channels.** wordpress.org SVN (stable, customers) via `.claude/bin/build-release.sh`; GitHub +
+  Git Updater (dev/beta, opt-in sites) via `.claude/bin/wcd-release.sh mainwp` + `.github/workflows/release.yml`.
+  Both release scripts live in the private wcd-ops repo (`/Users/mike/htdocs/wcd/.claude/bin/`), not
+  in this public repo.
 - **Never add an `Update URI:` header.** It would stop wordpress.org customers from receiving normal
   plugin updates. The dev channel uses `GitHub Plugin URI` + `Primary Branch: main` instead.
 - **`WCD_MAINWP_USE_DEV_BRANCH` is an explicit `wp-config.php` opt-in, default false.** No
@@ -33,7 +36,7 @@ Rules for implementing and reviewing the WebChange Detector MainWP add-on. Archi
   the other identifier.
 - **Beta tags do NOT move `Stable tag:`.** A `-beta.N`/`-rc.N`/`-alpha.N` release bumps only the
   `Version:` header; `readme.txt` `Stable tag:` keeps pointing at the last stable release.
-- **`scripts/wcd-mainwp-release.sh` never touches wp.org SVN or `wp-repo-mainwp/`.** It only bumps
+- **`.claude/bin/wcd-release.sh mainwp` never touches wp.org SVN or `wp-repo-mainwp/`.** It only bumps
   the header (+ `Stable tag:` on stable targets), commits, tags `vX.Y.Z[-beta.N]`, and pushes to
   `origin/dev`. It is BSD/macOS-safe (no `grep -P`, no `sed -i` without a backup).
 
