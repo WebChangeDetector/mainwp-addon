@@ -57,7 +57,6 @@ class WCD_MainWP_Ajax {
 			'take_post',
 			'poll',
 			'results',
-			'mark_comparison',
 			'runs_render',
 			'runs_comparisons',
 			'run_start',
@@ -431,6 +430,8 @@ class WCD_MainWP_Ajax {
 				'default_desktop'   => ! empty( $group['default_desktop'] ),
 				'default_mobile'    => ! empty( $group['default_mobile'] ),
 				'threshold'         => isset( $group['threshold'] ) ? (float) $group['threshold'] : 0,
+				// The API returns the alert recipients as a comma-separated string.
+				'alert_emails'      => (string) ( $group['alert_emails'] ?? '' ),
 				'basic_auth_user'   => (string) ( $group['basic_auth_user'] ?? '' ),
 				// Password is never returned; this flag drives the "password is set" hint.
 				'has_basic_auth'    => ! empty( $group['has_basic_auth'] ),
@@ -456,6 +457,8 @@ class WCD_MainWP_Ajax {
 	 *   is no password_action field on the API.
 	 * - proxy_type: 'static' when on, 'none' when off (never '').
 	 * - screenshot_delay: integer clamped 7-60, or omitted when the field is left empty.
+	 * - alert_emails: present => written as an array (an empty field sends [] and clears the list,
+	 *   so no alert mails are sent); absent => leave unchanged.
 	 *
 	 * @return void
 	 */
@@ -490,6 +493,13 @@ class WCD_MainWP_Ajax {
 
 		if ( isset( $_POST['threshold'] ) ) {
 			$fields['threshold'] = (float) sanitize_text_field( wp_unslash( $_POST['threshold'] ) );
+		}
+
+		// alert_emails: comma-separated field => array (trimmed, empty entries dropped). An empty
+		// field sends [] so the API clears the list; the API validates each entry as an email.
+		if ( isset( $_POST['alert_emails'] ) ) {
+			$emails                 = explode( ',', sanitize_text_field( wp_unslash( $_POST['alert_emails'] ) ) );
+			$fields['alert_emails'] = array_values( array_filter( array_map( 'trim', $emails ) ) );
 		}
 
 		// screenshot_delay: empty leaves it unchanged (omit the key); a value is clamped 7-60.
@@ -943,7 +953,7 @@ class WCD_MainWP_Ajax {
 		$status  = 0;
 
 		foreach ( array_chunk( $groups, self::TAKE_CHUNK, true ) as $chunk ) {
-			$response = WCD_MainWP_API::take_screenshot( array_values( $chunk ), $sc_type, 'manual', self::token(), true, true );
+			$response = WCD_MainWP_API::take_screenshot( array_values( $chunk ), $sc_type, 'manual', self::token(), true );
 			if ( ! $response['ok'] ) {
 				// Keep the FIRST failure's message: it is usually the root cause (e.g. 402).
 				if ( '' === $error ) {
@@ -1222,29 +1232,6 @@ class WCD_MainWP_Ajax {
 
 		$comparisons = WCD_MainWP_Update_Flow::extract_urls( $response['data'] );
 		wp_send_json_success( array( 'comparisons' => array_map( array( self::class, 'shape_comparison' ), $comparisons ) ) );
-	}
-
-	/**
-	 * Update a comparison's review status (ok, to_fix or false_positive).
-	 *
-	 * @return void
-	 */
-	public static function mark_comparison(): void {
-		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
-		$id     = isset( $_POST['id'] ) ? sanitize_text_field( wp_unslash( $_POST['id'] ) ) : '';
-		$status = isset( $_POST['status'] ) ? sanitize_text_field( wp_unslash( $_POST['status'] ) ) : '';
-		$valid  = array( 'ok', 'to_fix', 'false_positive' );
-
-		if ( '' === $id || ! in_array( $status, $valid, true ) ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid comparison or status.', 'webchangedetector-for-mainwp' ) ) );
-		}
-
-		$response = WCD_MainWP_API::update_comparison( $id, $status, self::token() );
-		if ( ! $response['ok'] ) {
-			wp_send_json_error( array( 'message' => $response['error'] ) );
-		}
-
-		wp_send_json_success( array( 'status' => $status ) );
 	}
 
 	/* ─────────────────────── Visual Checks overview ─────────────────────── */

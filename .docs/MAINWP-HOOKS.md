@@ -19,7 +19,8 @@ fatal):
    No hook can start an update.
 
 If a future MainWP release removes/changes either, the guard fires and the feature degrades (we ask
-the user to run the native update; the after-update hook still drives the post screenshots).
+the user to run the native update; that update then runs without checks, like any update started
+outside the WCD flow).
 
 ## Hooks we use
 
@@ -40,17 +41,16 @@ the user to run the native update; the after-update hook still drives the post s
 | `mainwp_updates_before_translation_updates` | action | `$websites, $total_translation_upgrades, ...` | Same bar, type `translations`; MainWP only fires it when the `mainwp_show_language_updates` setting is on |
 | `mainwp_updates_overview_after_update_details` | action | `$currentSite, $globalView, $userExtension` | Compact "WCD Updates" card (`widget-overview-card.php`) after the per-type cards in the native Updates Overview widget; fires on the Operations dashboard (bulk scope) AND an individual child-site overview (site scope via `$currentSite`). Only with a token and enabled site(s) |
 | `mainwp_widget_updates_actions_top` | action | `$active_tab` | Selection bar (`updates-bar.php`, inline variant) inside the actions bar of the individual site's Updates subpage (`page=managesites&updateid=N`). CAUTION: the same hook also fires on the global Updates page (where the four per-tab hooks above already render the bar) and the `$active_tab` slugs collide between the two pages, so the renderer gates on `$GLOBALS['plugin_page'] === 'managesites'`, never on the hook argument. The subpage switches tabs client-side, so the buttons carry an empty `data-update-type` and the JS resolves the type from the active tab at click time |
-| `mainwp_after_wp_update` | action | `$information, $site` | Once per site after a core update -> post screenshots (recovery / non-card coverage) |
-| `mainwp_after_plugin_theme_translation_update` | action | `$information, $type, $slugs, $site` | Once per type after plugin/theme/translation update -> post screenshots |
 | `mainwp_pageheader_extensions` / `mainwp_pagefooter_extensions` | action | plugin file | MainWP chrome around the whole extension page (all four tabs: Run/Checks/Settings/Account) |
 | `mainwp_pageheader_sites` / `mainwp_pagefooter_sites` | action | tab slug | MainWP chrome around the per-site tab only (`WcdVisualRegressionTesting`) |
 
 ### Notes on the update hooks (verified)
 
-- `mainwp_after_wp_update` and `mainwp_after_plugin_theme_translation_update` are the genuinely
-  once-per-site (core) / once-per-type (plugins, themes, translations) after-hooks. They fire from
-  both the abilities path and the legacy updates handler, and the translation hook also fires from
-  cron. Therefore the add-on **dedupes on a run-id transient**, not just `site->id`.
+- The after-update hooks (`mainwp_after_wp_update`, `mainwp_after_plugin_theme_translation_update`)
+  are deliberately NOT used. They fire for native, cron, REST and WP-CLI updates too, and carry no
+  pre screenshot, so a post-only screenshot would be compared against a stale baseline and burn
+  credits. Updates started outside the WCD flow therefore produce no screenshots and no checks; the
+  card flow dispatches its own pre and post screenshots.
 - `mainwp_website_before_updated` / `mainwp_website_updated` fire per low-level fetch (per update
   type), so they are noisier; we do not rely on them.
 - There is **no** hook to trigger updates and **no** hook that exposes a child's full page list.

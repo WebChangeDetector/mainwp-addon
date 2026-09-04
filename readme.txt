@@ -99,7 +99,7 @@ No, the plugin does that for you. It clears each child site's cache before the p
 
 = Does this work with MainWP updates started elsewhere (e.g. scheduled)? =
 
-Updates you start outside the plugin's own flow still trigger post-update screenshots as a safety net, so you can compare against the last baseline. For the full pre/post comparison, start the run from the "Run visual checks & updates" button.
+No. Only updates started from the plugin's own "Run visual checks & updates" flow are checked. Updates you start elsewhere (native MainWP Updates page, scheduled or automatic updates) run without any screenshots or comparisons, so they never use check credits.
 
 == Screenshots ==
 

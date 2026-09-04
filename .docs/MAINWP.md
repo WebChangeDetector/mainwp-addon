@@ -27,8 +27,7 @@ by changing internals. Two operations have no hook and use guarded internal call
 2. **Trigger a single site's update** - `MainWP_Abilities_Updates::execute_update_site_*`.
 
 Both are wrapped in `class_exists`/`method_exists` guards; if a future MainWP release changes them, the
-feature degrades to a notice (and the after-update hook still drives post screenshots) instead of a
-fatal.
+feature degrades to a notice instead of a fatal.
 
 ## wordpress.org release
 
@@ -56,7 +55,7 @@ webchangedetector-for-mainwp/
 │   ├── class-wcd-mainwp-site-settings.php  # API token, verification, account cache, settings page, auto-enable on add
 │   ├── class-wcd-mainwp-url-sync.php       # Fetch child URLs (posts hook + pages guarded) -> two-step sync
 │   ├── class-wcd-mainwp-cache-purge.php    # Child-site cache purge via mainwp_fetchurlauthed + cache_purge_action
-│   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + after-update hook safety-net + pending-update counts
+│   ├── class-wcd-mainwp-update-flow.php    # Update trigger (guarded) + pending-update counts + run state
 │   ├── class-wcd-mainwp-ajax.php           # AJAX endpoints (settings + safe-update orchestration + runs overview)
 │   ├── class-wcd-mainwp-runs-view.php      # Renders the Run + Checks tab bodies, the extension-page tab switcher (render_tabs), filters + batch/list rendering
 │   └── class-wcd-mainwp-widget.php         # The WCD Updates dashboard widget (entry point) + its Visual Checks "Run" tab panel
@@ -90,7 +89,6 @@ See `.docs/MAINWP-HOOKS.md` for the full table. Key ones:
 | `mainwp_added_new_site` | Auto-enable a newly added child site for WCD (opt-out via the settings toggle) |
 | `mainwp_getallposts` | Fetch a child's posts (pages use the guarded call) |
 | `mainwp_updates_before_wp_updates` / `..._plugin_updates` / `..._theme_updates` / `..._translation_updates` | Render the compact safe-update bar (`templates/updates-bar.php`) above each Updates-page tab's native table (one renderer, type from the firing hook; only with a token and pending updates of the type) |
-| `mainwp_after_wp_update` / `mainwp_after_plugin_theme_translation_update` | Post screenshots (recovery + non-card coverage) |
 
 ## Settings & Storage
 
@@ -126,14 +124,15 @@ Client: `WCD_MainWP_API` (`includes/class-wcd-mainwp-api.php`), all static. Base
 `https://api.webchangedetector.com`).
 
 Methods: `get_account`, `create_trial_account` (pre-token signup, standalone `wp_remote_post`, see
-"Free trial signup" below), `list_groups`, `create_group`, `update_group`, `get_group` (single group,
+"Free trial signup" below), `create_group`, `update_group`, `get_group` (single group,
 on-demand settings prefill; the password is never returned, `has_basic_auth` signals it is set),
-`get_group_urls`, `update_url_in_group`,
-`update_urls_in_group`, `select_all_urls_in_group` (toggles one device for ALL group urls in one
-`PUT /groups/{id}/urls/select-all` call, a single SQL UPDATE server-side — used by the "select all"
-toggles so large sites stay fast), `create_website`, `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
+`get_group_urls`, `update_url_in_group`, `select_all_urls_in_group` (toggles one device for ALL
+group urls in one `PUT /groups/{id}/urls/select-all` call, a single SQL UPDATE server-side, used by
+the "select all" toggles so large sites stay fast), `create_website`, `get_websites` (domain lookup
+behind `find_existing_website()`), `sync_urls` + `start_url_sync` (two-step), `take_screenshot`
 (supports `batch_per_group`: one batch per group + a group->batch map in the response), `get_queues`,
-`get_comparisons`, `get_batch`, `list_batches`, `update_comparison`.
+`get_comparisons`, `list_batches`. The client carries no unused wrappers: add a method only when a
+caller needs it.
 
 Vocabulary: data-model terms (`manual`/`monitoring`, `source=manual`) in API calls; UI copy says
 "On-Demand Check". Never expose AI model names (the API strips them server-side).
@@ -248,13 +247,16 @@ browser is the scheduler and orchestrates the phases as **barriers** so every si
 
 1. **PRE**: ONE `take_pre` call with all check-enabled sites -> **purge each site's child cache**
    (synchronous, best effort) -> dispatch the pre batches -> poll all batches aggregated until done.
-2. **UPDATES**: `run_update` per site (sequential) -> `execute_update_site_*` (guarded, synchronous;
-   suppresses the after-update hook so post is not double-fired) -> **purge the site's child cache**
-   when anything was updated. A per-site failure (e.g. offline) is tolerated; "nothing to update" is
+2. **UPDATES**: `run_update` per site (sequential) -> `execute_update_site_*` (guarded, synchronous)
+   -> **purge the site's child cache** when anything was updated. A per-site failure (e.g. offline) is tolerated; "nothing to update" is
    success-no-post. An Updates-page run additionally sends `update_type` (+ `slugs[]` for
    plugins/themes/translations) so only the selected type/items are installed; the legacy shape
    (no `update_type`) still installs all four types.
 3. **POST**: ONE `take_post` call with all sites -> poll aggregated -> `get comparisons` per batch.
+
+Only this flow produces checks. Updates started outside the WCD flow (native Updates page, cron,
+REST, WP-CLI) never trigger screenshots or checks: the add-on deliberately does not use MainWP's
+after-update hooks (see `.docs/MAINWP-HOOKS.md`).
 
 **Cache purging** (`WCD_MainWP_Cache_Purge`): both purges go through the documented
 `mainwp_fetchurlauthed` filter with the `cache_purge_action` child callable (ships with MainWP Child
@@ -326,11 +328,6 @@ on-demand cards). POST-phase polls also send the run's PRE batches (`pre_batches
 count is shifted from processing to failed, because a check whose pre screenshot failed never gets
 a comparison (`run_resume_post` returns them for the resume path). Dynamic widths (timeline fill,
 credit bar) use the `.wcd-w-*` step utilities, never inline styles.
-
-**After-update hook safety-net** (`mainwp_after_*`): for updates started outside our card
-(cron/native). Deduped per site via a short transient; suppressed while the card flow owns the run.
-Post-only (no reliable pre in a synchronous before-hook). Purges the site's child cache (behind the
-same dedupe) right before enqueuing the post screenshots.
 
 **Run-state persistence + auto-resume (any phase)**: because the browser orchestrates the run, every
 phase transition is persisted server-side in the `wcd_mainwp_active_run` option
@@ -442,7 +439,9 @@ The four tab bodies:
   website settings, scoped to the fields that apply to MainWP sites:
   - Top: **Screenshot region** (`screenshot_region` auto/us/eu), **Activate newly synced URLs by
     default** Desktop (`default_desktop`) + Mobile (`default_mobile`), **Difference threshold**
-    (`threshold`).
+    (`threshold`), **Alert emails** (`alert_emails`, the manual group's recipients for the
+    change-detected mail after an On-Demand Check, incl. WCD Update runs; the API defaults it to
+    the account email at group creation).
   - Advanced (a collapsible Fomantic `ui accordion`): **Basic Auth** username (`basic_auth_user`) +
     password (`basic_auth_password`), **Static IP proxy** toggle (`proxy_type`), **Screenshot delay**
     (`screenshot_delay`, 7 to 60 seconds, empty allowed), **CSS injection** (`css`), **JS injection**
@@ -464,7 +463,11 @@ The four tab bodies:
   it." The sentinel logic lives **only in the JS**, which sends `basic_auth_password` only when it
   wants a change (unchanged dots => key omitted; cleared field => `''`; a new value => that value),
   keeping the endpoint contract-simple. `css`/`js` are stored verbatim (only unslashed). The region
-  value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`).
+  value is sanitized against `WCD_MainWP_Site_Map::REGIONS` (`us`/`eu`/`auto`). `alert_emails` is a
+  comma-separated text field: `GET /groups/{id}` returns it as a comma-separated string, the save
+  handler splits it into a trimmed array (empty entries dropped) and sends it **present => written**
+  (an empty field sends `[]`, which clears the list so no alert mails go out) or **absent =>
+  unchanged**; the API validates each entry as an email (a 422 surfaces in the modal's error line).
 - **Account** (`WCD_MainWP_Site_Settings::render_settings_form` -> `settings-page.php`): trial
   signup form (no-token state, primary; see "Free trial signup"), API token form, auto-enable
   toggle, plan/credits card. Saving the token redirects back to this tab.

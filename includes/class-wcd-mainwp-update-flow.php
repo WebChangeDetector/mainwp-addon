@@ -2,10 +2,9 @@
 /**
  * Update orchestration helpers.
  *
- * Two responsibilities:
- *  1. Trigger a single site's MainWP update synchronously (sanctioned internal call, guarded).
- *  2. The after-update hook safety-net (post recovery for the card flow + coverage for updates
- *     started outside our card). Suppressed while the card flow drives the update itself.
+ * Triggers a single site's MainWP update synchronously (sanctioned internal call, guarded),
+ * reads pending-update counts/items from MainWP's upgrade columns, and persists the run state
+ * for the browser-driven safe-update flow (resume).
  *
  * @package WebChangeDetector_MainWP
  */
@@ -13,31 +12,17 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Orchestrates triggering MainWP updates and the after-update post-screenshot safety net.
+ * Orchestrates triggering MainWP updates, pending-update reads and the persisted run state.
+ *
+ * MainWP's after-update hooks (mainwp_after_wp_update, mainwp_after_plugin_theme_translation_update)
+ * are deliberately NOT used: updates started outside the WCD flow (native Updates page, cron, REST,
+ * WP-CLI) must not produce screenshots or checks. They carry no pre screenshot, so a post-only
+ * screenshot would be compared against a stale baseline and burn credits. The card flow dispatches
+ * its own pre and post screenshots (take_pre / take_post / run_resume_post).
  */
 class WCD_MainWP_Update_Flow {
 
 	const ABILITIES_CLASS = '\\MainWP\\Dashboard\\MainWP_Abilities_Updates';
-
-	/**
-	 * Request-scoped suppression: true while our own card run owns the update.
-	 *
-	 * @var bool
-	 */
-	protected static $suppress = false;
-
-	/** How long a "post already triggered" marker lives, to dedupe multiple after-hooks per run. */
-	const POST_DEDUPE_TTL = 180;
-
-	/**
-	 * Register the after-update hooks.
-	 *
-	 * @return void
-	 */
-	public static function init(): void {
-		add_action( 'mainwp_after_wp_update', array( self::class, 'on_after_core_update' ), 10, 2 );
-		add_action( 'mainwp_after_plugin_theme_translation_update', array( self::class, 'on_after_plugin_theme_update' ), 10, 4 );
-	}
 
 	/* ─────────────────────────── Update trigger ────────────────────────── */
 
@@ -50,8 +35,7 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
-	 * Trigger updates for one site, synchronously. Suppresses the after-update hooks for the
-	 * duration so we do not double-fire post screenshots.
+	 * Trigger updates for one site, synchronously.
 	 *
 	 * Without an update type, all four update types run (the legacy whole-site behavior of the
 	 * widget, Run tab and per-site tab). With a type, only the matching abilities method runs;
@@ -95,55 +79,50 @@ class WCD_MainWP_Update_Flow {
 			}
 		}
 
-		self::$suppress = true;
-		$updated        = 0;
-		$offline        = false;
-		$errors         = array();
+		$updated = 0;
+		$offline = false;
+		$errors  = array();
 
-		try {
-			foreach ( $methods as $type => $method ) {
-				if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
-					continue;
+		foreach ( $methods as $type => $method ) {
+			if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
+				continue;
+			}
+
+			// Each update type can take minutes with no other AJAX activity; keep the tracked
+			// run from looking abandoned to another tab in the meantime.
+			self::touch_run();
+
+			$input = array( 'site_id_or_domain' => $site_id );
+			// Slugs only apply on an explicitly typed (Updates-page) call: the legacy all-types
+			// loop must never scope three types to one type's slugs.
+			if ( '' !== $update_type && 'core' !== $type && ! empty( $slugs ) ) {
+				$input['slugs'] = $slugs;
+			}
+
+			$result = call_user_func( array( self::ABILITIES_CLASS, $method ), $input );
+
+			if ( is_wp_error( $result ) ) {
+				$code = $result->get_error_code();
+				if ( 'mainwp_site_offline' === $code ) {
+					$offline = true;
+				} elseif ( 'mainwp_no_updates' !== $code ) {
+					// "no updates available" is a normal, non-error outcome.
+					$errors[] = $result->get_error_message();
 				}
+				continue;
+			}
 
-				// Each update type can take minutes with no other AJAX activity; keep the tracked
-				// run from looking abandoned to another tab in the meantime.
-				self::touch_run();
-
-				$input = array( 'site_id_or_domain' => $site_id );
-				// Slugs only apply on an explicitly typed (Updates-page) call: the legacy all-types
-				// loop must never scope three types to one type's slugs.
-				if ( '' !== $update_type && 'core' !== $type && ! empty( $slugs ) ) {
-					$input['slugs'] = $slugs;
-				}
-
-				$result = call_user_func( array( self::ABILITIES_CLASS, $method ), $input );
-
-				if ( is_wp_error( $result ) ) {
-					$code = $result->get_error_code();
-					if ( 'mainwp_site_offline' === $code ) {
-						$offline = true;
-					} elseif ( 'mainwp_no_updates' !== $code ) {
-						// "no updates available" is a normal, non-error outcome.
-						$errors[] = $result->get_error_message();
-					}
-					continue;
-				}
-
-				if ( is_array( $result ) && ! empty( $result['updated'] ) ) {
-					// Core returns a single associative array; plugins/themes return a list.
-					$updated += array_keys( $result['updated'] ) === range( 0, count( $result['updated'] ) - 1 )
-						? count( $result['updated'] )
-						: 1;
-				}
-				if ( is_array( $result ) && ! empty( $result['errors'] ) ) {
-					foreach ( $result['errors'] as $err ) {
-						$errors[] = is_string( $err ) ? $err : wp_json_encode( $err );
-					}
+			if ( is_array( $result ) && ! empty( $result['updated'] ) ) {
+				// Core returns a single associative array; plugins/themes return a list.
+				$updated += array_keys( $result['updated'] ) === range( 0, count( $result['updated'] ) - 1 )
+					? count( $result['updated'] )
+					: 1;
+			}
+			if ( is_array( $result ) && ! empty( $result['errors'] ) ) {
+				foreach ( $result['errors'] as $err ) {
+					$errors[] = is_string( $err ) ? $err : wp_json_encode( $err );
 				}
 			}
-		} finally {
-			self::$suppress = false;
 		}
 
 		// Offline is a hard failure; other per-type errors are tolerated as long as something updated.
@@ -162,65 +141,6 @@ class WCD_MainWP_Update_Flow {
 			'offline' => false,
 			'error'   => $errors ? implode( '; ', $errors ) : '',
 		);
-	}
-
-	/* ───────────────────────── After-update hooks ──────────────────────── */
-
-	/**
-	 * Core update finished for a site.
-	 *
-	 * @param mixed  $information Update response.
-	 * @param object $site        Site object.
-	 */
-	public static function on_after_core_update( $information, $site ): void {
-		self::maybe_take_post( $site );
-	}
-
-	/**
-	 * Plugin/theme/translation update finished for a site.
-	 *
-	 * @param mixed  $information Update response.
-	 * @param string $type        plugin|theme|translation.
-	 * @param string $slugs       Comma-separated slugs.
-	 * @param object $site        Site object.
-	 */
-	public static function on_after_plugin_theme_update( $information, $type, $slugs, $site ): void {
-		self::maybe_take_post( $site );
-	}
-
-	/**
-	 * Enqueue post screenshots for the site's manual group, unless our card flow already owns the
-	 * run or we already did it for this site within the dedupe window.
-	 *
-	 * @param object $site MainWP site object.
-	 * @return void
-	 */
-	protected static function maybe_take_post( $site ): void {
-		if ( self::$suppress ) {
-			return;
-		}
-
-		$site_id = is_object( $site ) && isset( $site->id ) ? (int) $site->id : 0;
-		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
-			return;
-		}
-
-		$dedupe_key = 'wcd_post_done_' . $site_id;
-		if ( WCD_MainWP_Options::get_transient( $dedupe_key ) ) {
-			return;
-		}
-		WCD_MainWP_Options::set_transient( $dedupe_key, 1, self::POST_DEDUPE_TTL );
-
-		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
-		if ( '' !== $group_id ) {
-			// Purge the child's cache first (synchronous, behind the dedupe above) so the post
-			// screenshots capture the updated site, not a cached pre-update version. Adds one
-			// child request to MainWP's update response; acceptable at the end of an update.
-			WCD_MainWP_Cache_Purge::purge_site( $site_id );
-
-			// Fire-and-forget: never block MainWP's own update response on our screenshot call.
-			WCD_MainWP_API::take_screenshot( array( $group_id ), 'post', 'manual', '', false );
-		}
 	}
 
 	/* ─────────────────────────────── Preflight ─────────────────────────── */

@@ -575,6 +575,8 @@
         setCheckbox(settingsField(modal, 'default_mobile'), data.default_mobile);
         var threshold = settingsField(modal, 'threshold');
         if (threshold) { threshold.value = (data.threshold !== undefined && data.threshold !== null) ? data.threshold : ''; }
+        var alertEmails = settingsField(modal, 'alert_emails');
+        if (alertEmails) { alertEmails.value = data.alert_emails || ''; }
         var authUser = settingsField(modal, 'basic_auth_user');
         if (authUser) { authUser.value = data.basic_auth_user || ''; }
         // A stored password shows the sentinel dots (leave to keep, clear to remove, type to replace).
@@ -603,9 +605,16 @@
         if (!modal) { return; }
 
         modal.setAttribute('data-site-id', String(siteId));
+        // The modal element is reused for every site, so the previous site's values are still in
+        // the fields until fillSettings() overwrites them. data-loaded marks "these fields belong
+        // to data-site-id"; it is cleared on every open and set only after a successful fill, and
+        // onSaveSiteSettings() refuses to save without it. Hiding the form alone would not do:
+        // the Save button lives in the modal's .actions block, outside the form.
+        modal.removeAttribute('data-loaded');
         var loading = modal.querySelector('[data-role="loading"]');
         var form = modal.querySelector('[data-role="form"]');
         var error = modal.querySelector('[data-role="error"]');
+        var save = modal.querySelector('.wcd-settings-save');
         // The Save control is type="button" and the JS reads fields by name (it never submits the
         // form), so block any real form submission once: Enter must never trigger a full page reload,
         // even if the field count ever drops below the browser's implicit-submit suppression.
@@ -616,12 +625,19 @@
         if (error) { error.hidden = true; error.textContent = ''; }
         if (loading) { loading.hidden = false; }
         if (form) { form.hidden = true; }
+        if (save) { save.disabled = true; }
         showSettingsModal(modal);
 
         api('get_site_settings', { site_id: siteId }).then(function (data) {
+            // Ignore a response that no longer belongs to the site the modal shows: the user can
+            // close this modal mid-load and reopen it for another site, and filling site A's values
+            // into site B's form (data-loaded included) would silently save them onto B's group.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             fillSettings(modal, data);
+            modal.setAttribute('data-loaded', '1');
             if (loading) { loading.hidden = true; }
             if (form) { form.hidden = false; }
+            if (save) { save.disabled = false; }
             // Init the accordion (collapsed) once the form is visible.
             if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.accordion === 'function') {
                 window.jQuery(modal).find('.wcd-settings-advanced').accordion({ exclusive: false });
@@ -630,10 +646,15 @@
                 window.jQuery(modal).find('.ui.dropdown').dropdown();
             }
         }).catch(function (e) {
+            // Same stale-response guard as above: a late failure for a previous site must not close
+            // the modal or show its error over the form another site has already loaded.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             if (handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
+            // Form and Save stay locked: the fields were never filled for this site, so saving
+            // them would write empty or previous-site values (an empty alert_emails clears the
+            // recipient list, an empty threshold/basic auth overwrites the stored ones).
             if (loading) { loading.hidden = true; }
             if (error) { error.hidden = false; error.textContent = e.message; }
-            if (form) { form.hidden = false; }
         });
     }
 
@@ -642,12 +663,15 @@
         if (!modal) { return; }
         var siteId = parseInt(modal.getAttribute('data-site-id'), 10) || 0;
         if (!siteId) { return; }
+        // Refuse to save fields that were never loaded for this site (see onSiteSettings).
+        if ('1' !== modal.getAttribute('data-loaded')) { return; }
         var card = document.querySelector('.wcd-site[data-site-id="' + siteId + '"]');
         var error = modal.querySelector('[data-role="error"]');
         if (error) { error.hidden = true; error.textContent = ''; }
 
         var region = settingsField(modal, 'screenshot_region');
         var threshold = settingsField(modal, 'threshold');
+        var alertEmails = settingsField(modal, 'alert_emails');
         var authUser = settingsField(modal, 'basic_auth_user');
         var authPass = settingsField(modal, 'basic_auth_password');
         var delay = settingsField(modal, 'screenshot_delay');
@@ -660,6 +684,8 @@
             default_desktop: (settingsField(modal, 'default_desktop') || {}).checked ? 1 : 0,
             default_mobile: (settingsField(modal, 'default_mobile') || {}).checked ? 1 : 0,
             threshold: threshold ? threshold.value : '',
+            // Always sent: an emptied field clears the recipient list server-side.
+            alert_emails: alertEmails ? alertEmails.value : '',
             basic_auth_user: authUser ? authUser.value : '',
             proxy_on: (settingsField(modal, 'proxy_on') || {}).checked ? 1 : 0,
             screenshot_delay: delay ? delay.value : '',

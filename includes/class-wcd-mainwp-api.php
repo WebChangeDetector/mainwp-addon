@@ -92,10 +92,9 @@ class WCD_MainWP_API {
 	 * @param string $api_token  Bearer token; falls back to the stored token.
 	 * @param array  $query     Query args appended to the URL.
 	 * @param array  $headers   Extra request headers (e.g. x-wcd-domain).
-	 * @param array  $req_opts  Request options: 'timeout' (int) and 'blocking' (bool).
 	 * @return array Normalized result with keys 'ok' (bool), 'status' (int), 'data' (mixed), 'error' (string).
 	 */
-	protected static function request( string $method, string $endpoint, array $body = array(), string $api_token = '', array $query = array(), array $headers = array(), array $req_opts = array() ): array {
+	protected static function request( string $method, string $endpoint, array $body = array(), string $api_token = '', array $query = array(), array $headers = array() ): array {
 		if ( empty( $api_token ) ) {
 			$api_token = WCD_MainWP_Site_Settings::get_global();
 		}
@@ -105,15 +104,14 @@ class WCD_MainWP_API {
 		}
 
 		$args = array(
-			'method'   => $method,
-			'timeout'  => isset( $req_opts['timeout'] ) ? (int) $req_opts['timeout'] : 30,
-			'blocking' => ! isset( $req_opts['blocking'] ) || $req_opts['blocking'],
+			'method'  => $method,
+			'timeout' => 30,
 			// NOTE: we intentionally do NOT send x-wcd-plugin. That header makes the API treat the
 			// caller as the customer WP plugin: the CheckWpVersion middleware would compare our
 			// independent add-on version against the WP plugin's minimum version and reject us, and
 			// WebsiteResource would return the legacy shape. The webapp (the sibling agency
 			// dashboard) omits it too.
-			'headers'  => array_merge(
+			'headers' => array_merge(
 				array(
 					'Authorization' => 'Bearer ' . $api_token,
 					'Accept'        => 'application/json',
@@ -139,11 +137,6 @@ class WCD_MainWP_API {
 		}
 
 		$response = wp_remote_request( $url, $args );
-
-		// Fire-and-forget (non-blocking) request: nothing to parse, assume dispatched.
-		if ( empty( $args['blocking'] ) ) {
-			return self::result( ! is_wp_error( $response ), 0, null, is_wp_error( $response ) ? $response->get_error_message() : '' );
-		}
 
 		if ( is_wp_error( $response ) ) {
 			return self::result( false, 0, null, $response->get_error_message() );
@@ -284,17 +277,6 @@ class WCD_MainWP_API {
 	/* ─────────────────────────────── Groups ────────────────────────────── */
 
 	/**
-	 * List groups.
-	 *
-	 * @param string $api_token Bearer token; falls back to the stored token.
-	 * @param int    $per_page  Results per page.
-	 * @return array Normalized API result.
-	 */
-	public static function list_groups( string $api_token = '', int $per_page = 100 ): array {
-		return self::request( 'GET', '/groups', array(), $api_token, array( 'per_page' => $per_page ) );
-	}
-
-	/**
 	 * Create a group. Only known fields are forwarded.
 	 *
 	 * @param array  $args      Group fields, e.g. 'name', 'monitoring' (false), 'cms' ('WordPress').
@@ -344,18 +326,6 @@ class WCD_MainWP_API {
 	 */
 	public static function get_group_urls( string $group_id, string $api_token = '', array $filters = array() ): array {
 		return self::request( 'GET', '/groups/' . rawurlencode( $group_id ) . '/urls', array(), $api_token, $filters );
-	}
-
-	/**
-	 * Bulk update URLs in a group (desktop/mobile booleans per URL).
-	 *
-	 * @param string $group_id  Group UUID.
-	 * @param array  $urls      Array of items with keys 'id' (group_url_id), 'desktop' (bool), 'mobile' (bool).
-	 * @param string $api_token Bearer token; falls back to the stored token.
-	 * @return array Normalized API result.
-	 */
-	public static function update_urls_in_group( string $group_id, array $urls, string $api_token = '' ): array {
-		return self::request( 'PUT', '/groups/' . rawurlencode( $group_id ) . '/urls', array( 'urls' => $urls ), $api_token );
 	}
 
 	/**
@@ -499,19 +469,13 @@ class WCD_MainWP_API {
 	 * @param string $sc_type         'pre' (baseline) or 'post' (compare + diff).
 	 * @param string $source          'manual' | 'auto_update' | 'monitoring'.
 	 * @param string $api_token       Bearer token; falls back to the stored token.
-	 * @param bool   $blocking        Whether to wait for the response (false dispatches fire-and-forget).
 	 * @param bool   $batch_per_group Create one batch per group; the response then carries a `batches`
 	 *                                map (group uuid => batch uuid). Only sent when requested, so calls
 	 *                                against an older API stay identical (it returns the classic single
 	 *                                shared batch).
 	 * @return array Normalized API result.
 	 */
-	public static function take_screenshot( array $group_ids, string $sc_type = 'pre', string $source = 'manual', string $api_token = '', bool $blocking = true, bool $batch_per_group = false ): array {
-		$req_opts = $blocking ? array() : array(
-			'blocking' => false,
-			'timeout'  => 1,
-		);
-
+	public static function take_screenshot( array $group_ids, string $sc_type = 'pre', string $source = 'manual', string $api_token = '', bool $batch_per_group = false ): array {
 		$body = array(
 			'group_ids' => array_values( $group_ids ),
 			'sc_type'   => $sc_type,
@@ -521,15 +485,7 @@ class WCD_MainWP_API {
 			$body['batch_per_group'] = 1;
 		}
 
-		return self::request(
-			'POST',
-			'/screenshots/take',
-			$body,
-			$api_token,
-			array(),
-			array(),
-			$req_opts
-		);
+		return self::request( 'POST', '/screenshots/take', $body, $api_token );
 	}
 
 	/* ─────────────────────────────── Queues ────────────────────────────── */
@@ -569,17 +525,6 @@ class WCD_MainWP_API {
 	}
 
 	/**
-	 * Get a single batch (counts + summary).
-	 *
-	 * @param string $batch_id  Batch UUID.
-	 * @param string $api_token Bearer token; falls back to the stored token.
-	 * @return array Normalized API result.
-	 */
-	public static function get_batch( string $batch_id, string $api_token = '' ): array {
-		return self::request( 'GET', '/batches/' . rawurlencode( $batch_id ), array(), $api_token );
-	}
-
-	/**
 	 * List batches (runs). Accepts the same filters the webapp uses: 'page', 'per_page',
 	 * 'from', 'to' (Y-m-d), 'source' (manual|monitoring|auto_update),
 	 * 'status' ('new,ok,to_fix,false_positive'), 'group_ids' (csv), 'above_threshold' (bool).
@@ -590,17 +535,5 @@ class WCD_MainWP_API {
 	 */
 	public static function list_batches( array $filters = array(), string $api_token = '' ): array {
 		return self::request( 'GET', '/batches', array(), $api_token, $filters );
-	}
-
-	/**
-	 * Update a comparison status: 'ok' | 'to_fix' | 'false_positive'.
-	 *
-	 * @param string $id        Comparison ID.
-	 * @param string $status    New status ('ok' | 'to_fix' | 'false_positive').
-	 * @param string $api_token Bearer token; falls back to the stored token.
-	 * @return array Normalized API result.
-	 */
-	public static function update_comparison( string $id, string $status, string $api_token = '' ): array {
-		return self::request( 'PUT', '/comparisons/' . rawurlencode( $id ), array( 'status' => $status ), $api_token );
 	}
 }

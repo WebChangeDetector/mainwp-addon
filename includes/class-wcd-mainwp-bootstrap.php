@@ -68,7 +68,6 @@ class WCD_MainWP_Bootstrap {
 		// render_admin_page()); Site_Settings still registers the per-site tab on the Sites pages.
 		WCD_MainWP_Site_Settings::init();
 		WCD_MainWP_Url_Sync::init();
-		WCD_MainWP_Update_Flow::init();
 		WCD_MainWP_Ajax::init();
 
 		add_action( 'admin_enqueue_scripts', array( self::class, 'enqueue_assets' ) );
