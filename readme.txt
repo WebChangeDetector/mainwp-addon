@@ -32,13 +32,13 @@ An on-demand check is a visual diff you run around a change you make yourself, l
 = Features =
 
 * One-click WCD Updates: pre-update screenshots, updates, post-update screenshots, comparison: all in one run across all child sites.
+* Start a run where you already work: "Update Selected with Checks" and "Update All with Checks" on MainWP's own Updates page (WordPress, Plugins, Themes and Translations) with MainWP's row selection, on each child site's Updates subpage, from the WCD Updates widget on your Operations dashboard and every site overview, or for the whole fleet from the Run tab.
 * Automatic cache clearing: the child site's cache is cleared before the pre-update screenshots and after the updates, so screenshots never show a stale cached page. Works with 20+ caching plugins (WP Rocket, LiteSpeed Cache, W3 Total Cache, WP Super Cache and more) through the MainWP Child plugin, with nothing extra to install.
-* Bulk or single site: run the flow for every enabled child site at once or for one site from its overview.
 * Page selection per site: choose which URLs are checked, separately for desktop and mobile.
+* Check settings per site: screenshot region, difference threshold, alert emails, which devices new URLs are activated for, Basic Auth, static IP proxy, screenshot delay, and CSS or JS injection.
 * Checks overview: all runs across your sites with filters, change percentages and side-by-side comparisons.
-* WCD Updates widget: start a run from a draggable, hideable widget on your Operations dashboard or a single child site's overview.
 * Live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress, and automatic resume if you navigate away mid-run.
-* Account overview: your plan, remaining checks and renewal date on the Account tab.
+* Your account in the dashboard: sign up on the Account tab or connect an existing account with your API token, and see your plan, remaining checks and active sites.
 * Auto-enable new sites: optionally provision every newly added MainWP child site for visual checks automatically.
 
 = External service: WebChange Detector =
@@ -99,7 +99,7 @@ No, the plugin does that for you. It clears each child site's cache before the p
 
 = Does this work with MainWP updates started elsewhere (e.g. scheduled)? =
 
-No. Only updates started from the plugin's own "Run visual checks & updates" flow are checked. Updates you start elsewhere (native MainWP Updates page, scheduled or automatic updates) run without any screenshots or comparisons, so they never use check credits.
+No. Only updates you start with one of the plugin's own "with Checks" buttons are checked. Updates started with MainWP's own update buttons, and scheduled or automatic updates, run without any screenshots or comparisons, so they never use check credits.
 
 == Screenshots ==
 
@@ -113,6 +113,16 @@ No. Only updates started from the plugin's own "Run visual checks & updates" flo
 8. The Account tab: your plan, remaining checks and active sites, the API token, auto-enable for new sites, and the reset-connection option.
 
 == Changelog ==
+
+= 1.1.0 =
+* New: Sign up for a WebChange Detector account right on the Account tab.
+* New: "Update Selected with Checks" and "Update All with Checks" on MainWP's own Updates page.
+* New: The same two buttons on each child site's Updates subpage.
+* New: A "WCD Updates" card with an "Update with Checks" button inside MainWP's Updates Overview widget.
+* New: Per-site check settings: screenshot region, threshold, alert emails, Basic Auth, proxy, delay, CSS and JS.
+* Improvement: On MainWP's Updates page, selected sites without visual checks are updated too, badged in the pre-run overview, and use no checks.
+* Improvement: The safe-update flow is now called "WCD Updates".
+* Fix: Updates started outside WebChange Detector no longer produce screenshots. They used to trigger a post-update screenshot compared against an outdated baseline, using up checks for nothing.
 
 = 1.0.2 =
 * New: One unified extension page with Run, Checks, Settings and Account tabs. 
@@ -133,6 +143,9 @@ No. Only updates started from the plugin's own "Run visual checks & updates" flo
 * Initial release: safe-update flow (pre/post screenshots around MainWP updates), Visual Checks overview, dashboard widget, per-site URL selection, auto-enable for new sites, automatic cache clearing on child sites before pre-update screenshots and after updates.
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+Update with visual checks straight from MainWP's Updates page and Updates Overview widget, sign up without leaving the dashboard, and configure checks per site. Note: updates started outside WebChange Detector no longer produce screenshots.
 
 = 1.0.2 =
 A redesigned dashboard: one extension page with Run, Checks, Settings and Account tabs, a Safe Update widget, a live run popup, and automatic resume of interrupted runs so no checks are wasted.

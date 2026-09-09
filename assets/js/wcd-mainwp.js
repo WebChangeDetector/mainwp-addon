@@ -707,11 +707,22 @@
 
         button.disabled = true;
         api('save_site_settings', payload).then(function () {
+            // Same stale-response guard as the load path: the modal stays closable while the save
+            // is in flight, so site A's late success would otherwise tear down the modal site B has
+            // meanwhile opened.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             hideSettingsModal(modal);
         }).catch(function (e) {
+            // Same reason: site A's failure must neither close site B's modal nor print site A's
+            // error message over the form site B has loaded.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             if (card && handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
             if (error) { error.hidden = false; error.textContent = e.message; }
         }).finally(function () {
+            // Guarded too, because the Save button belongs to the one reused modal: re-enabling it
+            // for site A would hand site B a second submit while B's own save is still running.
+            // Reopening the modal always resets the button, so skipping this cannot strand it.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             button.disabled = false;
         });
     }
