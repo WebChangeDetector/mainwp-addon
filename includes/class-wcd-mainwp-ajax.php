@@ -455,8 +455,12 @@ class WCD_MainWP_Ajax {
 	 *   absent => leave the stored password unchanged. The JS owns the dots-sentinel UX and only
 	 *   sends this key when the user wants a change, so this endpoint stays contract-simple. There
 	 *   is no password_action field on the API.
+	 * - basic_auth_user: present => write it; absent => leave unchanged. Stored verbatim (only
+	 *   unslashed) so credentials are not altered by sanitizing.
 	 * - proxy_type: 'static' when on, 'none' when off (never '').
 	 * - screenshot_delay: integer clamped 7-60, or omitted when the field is left empty.
+	 * - threshold: float, or omitted when the field is left empty (an empty field must never be
+	 *   written as 0, which would make every pixel difference count as a change).
 	 * - alert_emails: present => written as an array (an empty field sends [] and clears the list,
 	 *   so no alert mails are sent); absent => leave unchanged.
 	 *
@@ -486,13 +490,16 @@ class WCD_MainWP_Ajax {
 			'screenshot_region' => $region,
 			'default_desktop'   => ! empty( $_POST['default_desktop'] ) && 'false' !== $_POST['default_desktop'],
 			'default_mobile'    => ! empty( $_POST['default_mobile'] ) && 'false' !== $_POST['default_mobile'],
-			'basic_auth_user'   => isset( $_POST['basic_auth_user'] ) ? sanitize_text_field( wp_unslash( $_POST['basic_auth_user'] ) ) : '',
 			// off => 'none', on => 'static'. Never send '' (the API enum is none|static|residential).
 			'proxy_type'        => ( ! empty( $_POST['proxy_on'] ) && 'false' !== $_POST['proxy_on'] ) ? 'static' : 'none',
 		);
 
-		if ( isset( $_POST['threshold'] ) ) {
-			$fields['threshold'] = (float) sanitize_text_field( wp_unslash( $_POST['threshold'] ) );
+		// threshold: empty leaves it unchanged (omit the key), same as screenshot_delay below.
+		// Never cast '' to 0.0: that would silently set the threshold to zero, so every pixel
+		// difference counts as a change.
+		$threshold_raw = isset( $_POST['threshold'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['threshold'] ) ) ) : '';
+		if ( '' !== $threshold_raw ) {
+			$fields['threshold'] = (float) $threshold_raw;
 		}
 
 		// alert_emails: comma-separated field => array (trimmed, empty entries dropped). An empty
@@ -519,11 +526,22 @@ class WCD_MainWP_Ajax {
 			$fields['js'] = (string) wp_unslash( $_POST['js'] );
 		}
 
+		// Basic Auth credentials are stored verbatim, like css / js above. Only unslash; do not run
+		// them through sanitize_text_field, which strips tags and trims whitespace and would
+		// silently alter a credential containing < or > or meaningful leading/trailing spaces.
+		// The site would then fail to capture with no visible cause, and the masked field would
+		// still look correct.
+		if ( isset( $_POST['basic_auth_user'] ) ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Credentials must reach the API verbatim; sanitizing would alter a valid username.
+			$fields['basic_auth_user'] = (string) wp_unslash( $_POST['basic_auth_user'] );
+		}
+
 		// Basic Auth password: the JS owns the dots-sentinel UX and sends the key ONLY when it wants
 		// a change, so the API contract stays simple: present => write it (an empty string clears it),
 		// absent => leave the stored password unchanged.
 		if ( isset( $_POST['basic_auth_password'] ) ) {
-			$fields['basic_auth_password'] = sanitize_text_field( wp_unslash( $_POST['basic_auth_password'] ) );
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Credentials must reach the API verbatim; sanitizing would alter a valid password.
+			$fields['basic_auth_password'] = (string) wp_unslash( $_POST['basic_auth_password'] );
 		}
 
 		$token = self::token();
@@ -1298,6 +1316,13 @@ class WCD_MainWP_Ajax {
 	 * update_type + selection[<site_id>][] fields persist an Updates-page run's scope so a resume
 	 * re-applies the original selection.
 	 *
+	 * Which sites are tracked depends on the shape, exactly like the run_update gate:
+	 * - legacy (no update_type): only sites enabled for visual checks;
+	 * - scoped (Updates-page): every managed MainWP site of the run, including the ones without
+	 *   activated visual checks. Those ARE updated, so leaving them out of the run state would
+	 *   make a resumed run report "Done" while silently skipping their updates. Their check count
+	 *   is forced to 0 server-side, which is what keeps them out of every screenshot phase.
+	 *
 	 * @return void
 	 */
 	public static function run_start(): void {
@@ -1310,25 +1335,41 @@ class WCD_MainWP_Ajax {
 		$names  = ( isset( $_POST['names'] ) && is_array( $_POST['names'] ) ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['names'] ) ) : array();
 		$checks = ( isset( $_POST['checks'] ) && is_array( $_POST['checks'] ) ) ? array_map( 'intval', wp_unslash( $_POST['checks'] ) ) : array();
 
+		$driver      = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
+		$update_type = self::update_type_from_request();
+		$selection   = '' !== $update_type ? self::selection_from_request() : array();
+		$managed     = '' !== $update_type ? WCD_MainWP_Site_Map::managed_sites() : array();
+
 		$sites = array();
 		foreach ( array_values( $ids ) as $i => $site_id ) {
-			if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
+			if ( ! $site_id ) {
+				continue;
+			}
+			$enabled = WCD_MainWP_Site_Map::is_enabled( $site_id );
+			if ( '' === $update_type ) {
+				if ( ! $enabled ) {
+					continue;
+				}
+			} elseif ( ! isset( $managed[ $site_id ] ) ) {
 				continue;
 			}
 			$sites[ $site_id ] = array(
 				'site_id' => $site_id,
 				'name'    => (string) ( array_values( $names )[ $i ] ?? '' ),
-				'checks'  => (int) ( array_values( $checks )[ $i ] ?? 0 ),
+				// A site without activated visual checks never has checks, whatever the request
+				// claims: this is the single server-side guard that keeps it out of take_pre /
+				// take_post and out of the credit math on a resume.
+				'checks'  => $enabled ? (int) ( array_values( $checks )[ $i ] ?? 0 ) : 0,
 			);
 		}
 
 		if ( empty( $sites ) ) {
-			wp_send_json_error( array( 'message' => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ) ) );
+			$message = '' === $update_type
+				? __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' )
+				: __( 'No managed sites to update.', 'webchangedetector-for-mainwp' );
+			wp_send_json_error( array( 'message' => $message ) );
 		}
 
-		$driver      = isset( $_POST['driver'] ) ? sanitize_text_field( wp_unslash( $_POST['driver'] ) ) : '';
-		$update_type = self::update_type_from_request();
-		$selection   = '' !== $update_type ? self::selection_from_request() : array();
 		WCD_MainWP_Update_Flow::start_run( $sites, $driver, $update_type, $selection );
 		wp_send_json_success( array( 'tracking' => true ) );
 	}
@@ -1403,17 +1444,23 @@ class WCD_MainWP_Ajax {
 	}
 
 	/**
-	 * Resume an abandoned run: dispatch the post screenshots for every updated site that is still
-	 * missing one, hand back all post batches (existing + new) for the card to poll, and stop
+	 * Resume an abandoned run: dispatch the post screenshots for every updated CHECK site that is
+	 * still missing one, hand back all post batches (existing + new) for the card to poll, and stop
 	 * tracking the run (everything left finishes server-side).
+	 *
+	 * A scoped run also tracks updated sites without activated visual checks. They are skipped
+	 * here: they have no checks to take, and dispatching for them would create empty batches (or
+	 * spend credits once a site is enabled later).
 	 *
 	 * @return void
 	 */
 	public static function run_resume_post(): void {
 		self::verify( check_ajax_referer( self::NONCE, 'nonce', false ) );
 
-		$state   = WCD_MainWP_Update_Flow::run_state();
-		$updated = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? array_map( 'intval', $state['updated_sites'] ) : array();
+		$state     = WCD_MainWP_Update_Flow::run_state();
+		$check_ids = WCD_MainWP_Update_Flow::check_site_ids( $state );
+		$updated   = isset( $state['updated_sites'] ) && is_array( $state['updated_sites'] ) ? array_map( 'intval', $state['updated_sites'] ) : array();
+		$updated   = array_values( array_intersect( $updated, $check_ids ) );
 		if ( empty( $state['sites'] ) || empty( $updated ) ) {
 			wp_send_json_error( array( 'message' => __( 'No interrupted run to resume.', 'webchangedetector-for-mainwp' ) ) );
 		}

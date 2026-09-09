@@ -455,8 +455,14 @@ The four tab bodies:
   `auto` to a concrete region, so the addon does not loop or poll. Per-field contract (the API writes
   a field only when present in the request): `proxy_type` is `static` when on / `none` when off (never
   `''`); `screenshot_delay` is clamped 7 to 60, or the key is omitted when the field is empty;
+  `threshold` is a float, or the key is omitted when the field is empty (an emptied field must never
+  be written as `0`, which would make every pixel difference count as a change);
   `basic_auth_password` is **present => write it** (non-empty SETs, empty string CLEARs) or **absent
-  => leave unchanged** (there is no `basic_auth_password_action` field on the API). The password is
+  => leave unchanged** (there is no `basic_auth_password_action` field on the API), and
+  `basic_auth_user` follows the same **present => write / absent => unchanged** rule. Both Basic Auth
+  values are stored **verbatim** (only unslashed, like `css`/`js`): `sanitize_text_field` strips tags
+  and trims, which would silently mangle a credential containing `<`/`>` or meaningful surrounding
+  whitespace and break captures on a protected site with no visible cause. The password is
   never returned by the API; the modal uses the `has_basic_auth` boolean and the **webapp dots
   convention**: when a password is stored the field is prefilled with a bullet sentinel (`••••••••`)
   plus the hint "A password is stored. Clear this field to remove it, or type a new one to replace
@@ -580,12 +586,33 @@ change version numbers without asking first.
    and `Primary Branch: main`, so Git Updater tracks published releases/tags by default. There is
    deliberately **no** `Update URI:` header (that would cut wordpress.org customers off from
    normal plugin updates).
-3. To follow the `dev` branch instead of tagged releases, add
-   `define( 'WCD_MAINWP_USE_DEV_BRANCH', true );` to `wp-config.php`. This is an explicit,
-   per-site opt-in: with it on, a `gu_primary_branch` filter points Git Updater at `dev` and a
-   warning admin notice is shown on the add-on's pages. There is **no** auto-detection (an earlier
-   approach enabled the beta channel whenever Git Updater was merely installed, silently serving
-   dev code to every such site).
+3. To follow the `dev` branch instead of tagged releases, switch the branch **in Git Updater's own
+   UI**: its plugin list offers "another version" per plugin; picking `dev` for this add-on writes
+   Git Updater's `current_branch_<repo>` option, and from then on the site updates from the `dev`
+   branch. This is the only step that actually moves a dashboard onto the beta channel. Git Updater
+   resolves the branch from that option and falls back to the `Primary Branch:` header when it is
+   unset (Git Updater 14.4.2, `src/Git_Updater/Plugin.php:171-179`; external reference, not part of
+   this repo). Because the option is keyed by the repository slug, the repo name and the plugin
+   directory name must stay identical (`webchangedetector-for-mainwp`).
+4. Optionally add `define( 'WCD_MAINWP_USE_DEV_BRANCH', true );` to `wp-config.php`. This is a
+   label, not a switch: it renders the "Beta (dev branch) update mode" admin notice on the add-on's
+   pages (`webchangedetector-for-mainwp.php:114-140`) so nobody mistakes a beta dashboard for a
+   stable one. It also registers a `gu_primary_branch` filter (`:99`,
+   `wcd_mainwp_set_git_updater_branch()` at `:80-95`), but that filter **does not exist in Git
+   Updater** (verified against the full 14.4.2 source: zero occurrences; the planner additionally
+   checked 10.0.0, 12.0.0, 12.10.0, 13.0.0, 14.0.0 and a GitHub-wide code search), so the callback
+   never fires and its legacy `mainwp-addon` slug fallback is inert too. Setting the constant
+   without doing step 3 leaves the site on the stable channel with a beta notice on screen.
+   **Known and accepted (Mike's decision, 2026-09-09): the filter is not being repaired and the
+   beta delivery is not changing.** The customer WP plugin carries the same construct.
+5. What a beta site actually installs is the **`dev` branch zipball**, not the CI-built release
+   asset from `.github/workflows/release.yml` (there is no `Release Asset: true` header). So
+   dev-only files (`.github/`, `.docs/`, `composer.json`, `phpcs.xml.dist`) are present on beta
+   installs, since `.distignore` only shapes the wordpress.org copy and the GitHub release zip,
+   never a Git Updater branch install; and every push to `dev` is immediately available to beta
+   sites, not just tagged betas. Both are accepted by design (Mike, 2026-09-09). The one practical
+   requirement: each beta must raise the `Version:` header on `dev`, or Git Updater sees no newer
+   version and offers no update.
 
 ### `.claude/bin/wcd-release.sh mainwp` (dev/beta channel)
 

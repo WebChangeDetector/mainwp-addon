@@ -652,7 +652,8 @@
             if (handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
             // Form and Save stay locked: the fields were never filled for this site, so saving
             // them would write empty or previous-site values (an empty alert_emails clears the
-            // recipient list, an empty threshold/basic auth overwrites the stored ones).
+            // recipient list, an empty basic auth user clears it, and a previous site's threshold
+            // would be written to this one).
             if (loading) { loading.hidden = true; }
             if (error) { error.hidden = false; error.textContent = e.message; }
         });
@@ -1406,11 +1407,16 @@
         startHeartbeat();
         // Track the run server-side so it can be resumed if this tab disappears mid-run.
         // Best effort: a failed tracking call must not block the run itself.
+        // EVERY run site is tracked, not just the check sites: this run updates all of them (a
+        // scoped Updates-page run deliberately includes sites without activated visual checks), so
+        // an untracked site would be silently skipped by a resume while the card still says "Done".
+        // Their checks are 0, and every screenshot phase runs off the check-site list, so widening
+        // the tracked set never adds a screenshot, a check, or a credit.
         var tracking = {
             driver: driverId(),
-            site_ids: checkSites.map(function (s) { return s.site_id; }),
-            names: checkSites.map(function (s) { return s.name; }),
-            checks: checkSites.map(function (s) { return s.checks; })
+            site_ids: sites.map(function (s) { return s.site_id; }),
+            names: sites.map(function (s) { return s.name; }),
+            checks: sites.map(function (s) { return s.checks; })
         };
         if (updatesScope && updatesScope.update_type) {
             // Persist the scope so a resume re-applies the original selection.
@@ -1739,7 +1745,9 @@
     }
 
     // Rebuild the run card from the persisted state and continue at its phase. The tracked sites are
-    // exactly the run's check sites (run_start only records sites with checks).
+    // ALL sites of the run: a scoped (Updates-page) run also covers sites without activated visual
+    // checks, which must still be updated by the resume. Screenshots stay restricted to the sites
+    // with checks > 0, so every take_pre / take_post below runs off checkSites, never off sites.
     function resumeRun(host, state) {
         if (activeRunRef || activeRun) { return; }   // a takeover is already under way in this tab
         var sites = (state.sites || []).map(function (s) {
@@ -1755,13 +1763,14 @@
 
         activeRun = true;
         resumePendingShown = false;   // the live run card now owns the slot
-        var single  = 1 === sites.length;
-        var total   = sites.reduce(function (n, s) { return n + s.checks; }, 0);
+        var single     = 1 === sites.length;
+        var checkSites = sites.filter(function (s) { return s.checks > 0; });
+        var total      = checkSites.reduce(function (n, s) { return n + s.checks; }, 0);
         var trigger = document.querySelector('.wcd-safe-update, .wcd-updates-run');
         setAllTriggersRunning(true);   // disable the CTAs so a re-click cannot wipe the resumed card
         // A resumed run plays out in the background: do NOT pop the modal open on its own. The
         // "Updates running" button next to the widget heading lets the user open it when they want.
-        var run = mountRun(host, trigger, sites, sites, single, total, false);
+        var run = mountRun(host, trigger, sites, checkSites, single, total, false);
         // Re-apply a scoped run's update type; the per-site slugs ride on the site entries.
         run.updatesScope = state.update_type ? { update_type: state.update_type } : null;
         startHeartbeat();
@@ -1786,15 +1795,16 @@
         // UPDATES: pre done; finish the remaining updates, then post.
         if ('updates' === state.phase) {
             setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
-            resumeUpdatesThenPost(run, sites, notUpdated).catch(function (e) { failRun(run, e); });
+            resumeUpdatesThenPost(run, notUpdated).catch(function (e) { failRun(run, e); });
             return;
         }
 
         // PRE (default): finish the pre screenshots (take any still missing, poll all), then continue.
+        // Only check sites can be missing a pre screenshot; the others never had one.
         setPhase(run, 0);
         var preBatchBySite = {};
         Object.keys(state.pre_batches || {}).forEach(function (k) { preBatchBySite[k] = state.pre_batches[k]; });
-        var missingPre = sites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
+        var missingPre = checkSites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
         var ensurePre = missingPre.length
             ? api('take_pre', { site_ids: missingPre }).then(function (d) {
                 Object.keys(d.batches || {}).forEach(function (k) { preBatchBySite[k] = d.batches[k]; });
@@ -1810,21 +1820,33 @@
             });
         }).then(function (final) {
             setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
-            return resumeUpdatesThenPost(run, sites, notUpdated);
+            return resumeUpdatesThenPost(run, notUpdated);
         }).catch(function (e) { failRun(run, e); });
     }
 
     // Shared tail for a resumed run: update the not-yet-updated sites, then take + poll the post phase.
-    // Credit-safe: only the notUpdated sites run again, scoped to the run's persisted type + slugs.
-    function resumeUpdatesThenPost(run, sites, notUpdated) {
+    // Credit-safe twice over: only the notUpdated sites are updated again (scoped to the run's
+    // persisted type + slugs), and only the run's check sites are screenshotted.
+    function resumeUpdatesThenPost(run, notUpdated) {
         setPhase(run, 1);
         setFill(run, 1 / 3);
         return runUpdatesSequential(notUpdated, run.updatesScope).then(function () {
+            // A scoped run can consist of sites WITHOUT visual checks only. There is nothing to
+            // screenshot then, and take_post with an empty site list would fail the run, so finish
+            // right after the updates (mirrors the same guard in runPhased).
+            if (!run.checkSites.length) {
+                api('run_discard', {}).catch(function () {});
+                setShot(run.post, { queue: 0, processing: 0, done: 0, failed: 0 });
+                setPhase(run, 3);
+                finishRun(run, {});
+                return null;
+            }
             setPhase(run, 2);
             setFill(run, 2 / 3);
             setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
-            return api('take_post', { site_ids: sites.map(function (s) { return s.site_id; }) });
+            return api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) });
         }).then(function (d) {
+            if (!d) { return null; }
             // Every post batch is dispatched: stop tracking (the rest finishes server-side).
             api('run_discard', {}).catch(function () {});
             return runPostPhase(run, d.batches || {});

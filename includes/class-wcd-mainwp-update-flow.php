@@ -310,9 +310,34 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
+	 * The tracked run sites that carry visual checks (checks > 0), by site id.
+	 *
+	 * A scoped (Updates-page) run also tracks managed sites WITHOUT activated visual checks: they
+	 * are updated, so a resume must know about them, but they must never be screenshotted. Every
+	 * screenshot phase and the run's completion count therefore run off this list, never off the
+	 * full 'sites' map. Tolerates a state written by an older version (missing 'checks' = 0).
+	 *
+	 * @param array $state Run state (from run_state()).
+	 * @return int[] Site ids with checks > 0.
+	 */
+	public static function check_site_ids( array $state ): array {
+		$ids   = array();
+		$sites = isset( $state['sites'] ) && is_array( $state['sites'] ) ? $state['sites'] : array();
+		foreach ( $sites as $site_id => $site ) {
+			if ( (int) ( $site['checks'] ?? 0 ) > 0 ) {
+				$ids[] = (int) $site_id;
+			}
+		}
+
+		return $ids;
+	}
+
+	/**
 	 * Start tracking a new run (replaces any previous state).
 	 *
 	 * @param array  $sites       Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 *                            A scoped run includes sites without visual checks (checks = 0):
+	 *                            they are updated but never screenshotted.
 	 * @param string $driver      Opaque id of the tab driving the run (so it can reclaim it instantly
 	 *                            after a same-tab reload/navigation, without waiting out the two-tab guard).
 	 * @param string $update_type Optional type scope of an Updates-page run ('' = legacy whole-site run).
@@ -442,7 +467,11 @@ class WCD_MainWP_Update_Flow {
 		}
 		$state['phase']                    = 'post';
 		$state['post_batches'][ $site_id ] = $batch;
-		if ( count( $state['post_batches'] ) >= count( $state['sites'] ) ) {
+		// Completion is measured against the sites that actually get a post batch, not against
+		// every tracked site: a scoped run also tracks sites without visual checks, which are
+		// updated but never screenshotted and would otherwise keep the run alive forever.
+		$expected = count( self::check_site_ids( $state ) );
+		if ( count( $state['post_batches'] ) >= max( 1, $expected ) ) {
 			self::clear_run();
 
 			return;
