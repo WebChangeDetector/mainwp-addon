@@ -114,7 +114,7 @@ No. Only updates you start with one of the plugin's own "with Checks" buttons ar
 
 == Changelog ==
 
-= 1.1.0 =
+= 1.1.1 =
 * New: Sign up for a WebChange Detector account right on the Account tab.
 * New: "Update Selected with Checks" and "Update All with Checks" on MainWP's own Updates page.
 * New: The same two buttons on each child site's Updates subpage.
@@ -144,7 +144,7 @@ No. Only updates you start with one of the plugin's own "with Checks" buttons ar
 
 == Upgrade Notice ==
 
-= 1.1.0 =
+= 1.1.1 =
 Update with visual checks straight from MainWP's Updates page and Updates Overview widget, sign up without leaving the dashboard, and configure checks per site. Note: updates started outside WebChange Detector no longer produce screenshots.
 
 = 1.0.2 =
