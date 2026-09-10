@@ -2,10 +2,9 @@
 /**
  * Update orchestration helpers.
  *
- * Two responsibilities:
- *  1. Trigger a single site's MainWP update synchronously (sanctioned internal call, guarded).
- *  2. The after-update hook safety-net (post recovery for the card flow + coverage for updates
- *     started outside our card). Suppressed while the card flow drives the update itself.
+ * Triggers a single site's MainWP update synchronously (sanctioned internal call, guarded),
+ * reads pending-update counts/items from MainWP's upgrade columns, and persists the run state
+ * for the browser-driven safe-update flow (resume).
  *
  * @package WebChangeDetector_MainWP
  */
@@ -13,31 +12,17 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Orchestrates triggering MainWP updates and the after-update post-screenshot safety net.
+ * Orchestrates triggering MainWP updates, pending-update reads and the persisted run state.
+ *
+ * MainWP's after-update hooks (mainwp_after_wp_update, mainwp_after_plugin_theme_translation_update)
+ * are deliberately NOT used: updates started outside the WCD flow (native Updates page, cron, REST,
+ * WP-CLI) must not produce screenshots or checks. They carry no pre screenshot, so a post-only
+ * screenshot would be compared against a stale baseline and burn credits. The card flow dispatches
+ * its own pre and post screenshots (take_pre / take_post / run_resume_post).
  */
 class WCD_MainWP_Update_Flow {
 
 	const ABILITIES_CLASS = '\\MainWP\\Dashboard\\MainWP_Abilities_Updates';
-
-	/**
-	 * Request-scoped suppression: true while our own card run owns the update.
-	 *
-	 * @var bool
-	 */
-	protected static $suppress = false;
-
-	/** How long a "post already triggered" marker lives, to dedupe multiple after-hooks per run. */
-	const POST_DEDUPE_TTL = 180;
-
-	/**
-	 * Register the after-update hooks.
-	 *
-	 * @return void
-	 */
-	public static function init(): void {
-		add_action( 'mainwp_after_wp_update', array( self::class, 'on_after_core_update' ), 10, 2 );
-		add_action( 'mainwp_after_plugin_theme_translation_update', array( self::class, 'on_after_plugin_theme_update' ), 10, 4 );
-	}
 
 	/* ─────────────────────────── Update trigger ────────────────────────── */
 
@@ -50,13 +35,20 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
-	 * Trigger all available updates for one site, synchronously. Suppresses the after-update
-	 * hooks for the duration so we do not double-fire post screenshots.
+	 * Trigger updates for one site, synchronously.
 	 *
-	 * @param int $site_id MainWP site id.
+	 * Without an update type, all four update types run (the legacy whole-site behavior of the
+	 * widget, Run tab and per-site tab). With a type, only the matching abilities method runs;
+	 * for plugins/themes/translations the optional slugs scope it to specific items (empty slugs
+	 * = all of this type, the abilities' own semantics, so the key is omitted then). Core never
+	 * takes slugs. Same guards as before; no new internal MainWP call.
+	 *
+	 * @param int    $site_id     MainWP site id.
+	 * @param string $update_type Optional type scope: core|plugins|themes|translations ('' = all).
+	 * @param array  $slugs       Optional item slugs (raw upgrade-column keys) for non-core types.
 	 * @return array Result with ok, updated, offline and error keys.
 	 */
-	public static function trigger_site_update( int $site_id ): array {
+	public static function trigger_site_update( int $site_id, string $update_type = '', array $slugs = array() ): array {
 		if ( ! self::can_trigger_updates() ) {
 			return array(
 				'ok'      => false,
@@ -66,55 +58,71 @@ class WCD_MainWP_Update_Flow {
 			);
 		}
 
-		self::$suppress = true;
-		$updated        = 0;
-		$offline        = false;
-		$errors         = array();
-
 		$methods = array(
-			'execute_update_site_core',
-			'execute_update_site_plugins',
-			'execute_update_site_themes',
-			'execute_update_site_translations',
+			'core'         => 'execute_update_site_core',
+			'plugins'      => 'execute_update_site_plugins',
+			'themes'       => 'execute_update_site_themes',
+			'translations' => 'execute_update_site_translations',
 		);
+		if ( '' !== $update_type ) {
+			$methods = array_intersect_key( $methods, array( $update_type => true ) );
+			// A typed call whose single abilities method is missing must degrade to a clear
+			// error, never a silent ok/no-op (REVIEW.md: guarded internal calls degrade to a
+			// notice). The legacy untyped loop keeps skipping missing methods per type instead.
+			if ( ! isset( $methods[ $update_type ] ) || ! method_exists( self::ABILITIES_CLASS, $methods[ $update_type ] ) ) {
+				return array(
+					'ok'      => false,
+					'updated' => 0,
+					'offline' => false,
+					'error'   => __( 'MainWP update API is unavailable. Run the native update instead.', 'webchangedetector-for-mainwp' ),
+				);
+			}
+		}
 
-		try {
-			foreach ( $methods as $method ) {
-				if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
-					continue;
+		$updated = 0;
+		$offline = false;
+		$errors  = array();
+
+		foreach ( $methods as $type => $method ) {
+			if ( ! method_exists( self::ABILITIES_CLASS, $method ) ) {
+				continue;
+			}
+
+			// Each update type can take minutes with no other AJAX activity; keep the tracked
+			// run from looking abandoned to another tab in the meantime.
+			self::touch_run();
+
+			$input = array( 'site_id_or_domain' => $site_id );
+			// Slugs only apply on an explicitly typed (Updates-page) call: the legacy all-types
+			// loop must never scope three types to one type's slugs.
+			if ( '' !== $update_type && 'core' !== $type && ! empty( $slugs ) ) {
+				$input['slugs'] = $slugs;
+			}
+
+			$result = call_user_func( array( self::ABILITIES_CLASS, $method ), $input );
+
+			if ( is_wp_error( $result ) ) {
+				$code = $result->get_error_code();
+				if ( 'mainwp_site_offline' === $code ) {
+					$offline = true;
+				} elseif ( 'mainwp_no_updates' !== $code ) {
+					// "no updates available" is a normal, non-error outcome.
+					$errors[] = $result->get_error_message();
 				}
+				continue;
+			}
 
-				// Each update type can take minutes with no other AJAX activity; keep the tracked
-				// run from looking abandoned to another tab in the meantime.
-				self::touch_run();
-
-				$result = call_user_func( array( self::ABILITIES_CLASS, $method ), array( 'site_id_or_domain' => $site_id ) );
-
-				if ( is_wp_error( $result ) ) {
-					$code = $result->get_error_code();
-					if ( 'mainwp_site_offline' === $code ) {
-						$offline = true;
-					} elseif ( 'mainwp_no_updates' !== $code ) {
-						// "no updates available" is a normal, non-error outcome.
-						$errors[] = $result->get_error_message();
-					}
-					continue;
-				}
-
-				if ( is_array( $result ) && ! empty( $result['updated'] ) ) {
-					// Core returns a single associative array; plugins/themes return a list.
-					$updated += array_keys( $result['updated'] ) === range( 0, count( $result['updated'] ) - 1 )
-						? count( $result['updated'] )
-						: 1;
-				}
-				if ( is_array( $result ) && ! empty( $result['errors'] ) ) {
-					foreach ( $result['errors'] as $err ) {
-						$errors[] = is_string( $err ) ? $err : wp_json_encode( $err );
-					}
+			if ( is_array( $result ) && ! empty( $result['updated'] ) ) {
+				// Core returns a single associative array; plugins/themes return a list.
+				$updated += array_keys( $result['updated'] ) === range( 0, count( $result['updated'] ) - 1 )
+					? count( $result['updated'] )
+					: 1;
+			}
+			if ( is_array( $result ) && ! empty( $result['errors'] ) ) {
+				foreach ( $result['errors'] as $err ) {
+					$errors[] = is_string( $err ) ? $err : wp_json_encode( $err );
 				}
 			}
-		} finally {
-			self::$suppress = false;
 		}
 
 		// Offline is a hard failure; other per-type errors are tolerated as long as something updated.
@@ -133,65 +141,6 @@ class WCD_MainWP_Update_Flow {
 			'offline' => false,
 			'error'   => $errors ? implode( '; ', $errors ) : '',
 		);
-	}
-
-	/* ───────────────────────── After-update hooks ──────────────────────── */
-
-	/**
-	 * Core update finished for a site.
-	 *
-	 * @param mixed  $information Update response.
-	 * @param object $site        Site object.
-	 */
-	public static function on_after_core_update( $information, $site ): void {
-		self::maybe_take_post( $site );
-	}
-
-	/**
-	 * Plugin/theme/translation update finished for a site.
-	 *
-	 * @param mixed  $information Update response.
-	 * @param string $type        plugin|theme|translation.
-	 * @param string $slugs       Comma-separated slugs.
-	 * @param object $site        Site object.
-	 */
-	public static function on_after_plugin_theme_update( $information, $type, $slugs, $site ): void {
-		self::maybe_take_post( $site );
-	}
-
-	/**
-	 * Enqueue post screenshots for the site's manual group, unless our card flow already owns the
-	 * run or we already did it for this site within the dedupe window.
-	 *
-	 * @param object $site MainWP site object.
-	 * @return void
-	 */
-	protected static function maybe_take_post( $site ): void {
-		if ( self::$suppress ) {
-			return;
-		}
-
-		$site_id = is_object( $site ) && isset( $site->id ) ? (int) $site->id : 0;
-		if ( ! $site_id || ! WCD_MainWP_Site_Map::is_enabled( $site_id ) ) {
-			return;
-		}
-
-		$dedupe_key = 'wcd_post_done_' . $site_id;
-		if ( WCD_MainWP_Options::get_transient( $dedupe_key ) ) {
-			return;
-		}
-		WCD_MainWP_Options::set_transient( $dedupe_key, 1, self::POST_DEDUPE_TTL );
-
-		$group_id = WCD_MainWP_Site_Map::get_manual_group( $site_id );
-		if ( '' !== $group_id ) {
-			// Purge the child's cache first (synchronous, behind the dedupe above) so the post
-			// screenshots capture the updated site, not a cached pre-update version. Adds one
-			// child request to MainWP's update response; acceptable at the end of an update.
-			WCD_MainWP_Cache_Purge::purge_site( $site_id );
-
-			// Fire-and-forget: never block MainWP's own update response on our screenshot call.
-			WCD_MainWP_API::take_screenshot( array( $group_id ), 'post', 'manual', '', false );
-		}
 	}
 
 	/* ─────────────────────────────── Preflight ─────────────────────────── */
@@ -291,7 +240,7 @@ class WCD_MainWP_Update_Flow {
 	 * WordPress core (0/1) + plugins + themes + translations.
 	 *
 	 * @param object $website MainWP website row.
-	 * @return array List of update item arrays (kind, name, version).
+	 * @return array List of update item arrays (kind, slug, name, version).
 	 */
 	protected static function items_from_website( $website ): array {
 		$items = array();
@@ -300,6 +249,7 @@ class WCD_MainWP_Update_Flow {
 		if ( is_array( $core ) && ! empty( $core ) ) {
 			$items[] = array(
 				'kind'    => 'core',
+				'slug'    => '',
 				'name'    => 'WordPress',
 				'version' => (string) ( $core['new'] ?? ( $core['new_version'] ?? '' ) ),
 			);
@@ -321,6 +271,10 @@ class WCD_MainWP_Update_Flow {
 				$update  = isset( $entry['update'] ) && is_array( $entry['update'] ) ? $entry['update'] : array();
 				$items[] = array(
 					'kind'    => $kind,
+					// The raw column key for plugins/themes (the same key the abilities' slugs
+					// filter matches); translations carry their slug inside the entry (their
+					// column is a plain list, so the key is just a numeric index).
+					'slug'    => 'translation' === $kind ? (string) ( $entry['slug'] ?? '' ) : (string) $slug,
 					'name'    => (string) ( $entry['Name'] ?? ( $entry['name'] ?? ( is_string( $slug ) ? $slug : '' ) ) ),
 					'version' => (string) ( $update['new_version'] ?? ( $entry['new_version'] ?? ( $entry['version'] ?? '' ) ) ),
 				);
@@ -346,7 +300,8 @@ class WCD_MainWP_Update_Flow {
 	/**
 	 * The persisted state of the current safe-update run, or an empty array.
 	 *
-	 * @return array Run state (started_at, last_activity, phase, sites, pre_batches, updated_sites, post_batches).
+	 * @return array Run state (started_at, last_activity, phase, sites, update_type, site_slugs,
+	 *               pre_batches, updated_sites, post_batches).
 	 */
 	public static function run_state(): array {
 		$state = WCD_MainWP_Options::get( self::RUN_STATE_KEY, array() );
@@ -355,14 +310,42 @@ class WCD_MainWP_Update_Flow {
 	}
 
 	/**
+	 * The tracked run sites that carry visual checks (checks > 0), by site id.
+	 *
+	 * A scoped (Updates-page) run also tracks managed sites WITHOUT activated visual checks: they
+	 * are updated, so a resume must know about them, but they must never be screenshotted. Every
+	 * screenshot phase and the run's completion count therefore run off this list, never off the
+	 * full 'sites' map. Tolerates a state written by an older version (missing 'checks' = 0).
+	 *
+	 * @param array $state Run state (from run_state()).
+	 * @return int[] Site ids with checks > 0.
+	 */
+	public static function check_site_ids( array $state ): array {
+		$ids   = array();
+		$sites = isset( $state['sites'] ) && is_array( $state['sites'] ) ? $state['sites'] : array();
+		foreach ( $sites as $site_id => $site ) {
+			if ( (int) ( $site['checks'] ?? 0 ) > 0 ) {
+				$ids[] = (int) $site_id;
+			}
+		}
+
+		return $ids;
+	}
+
+	/**
 	 * Start tracking a new run (replaces any previous state).
 	 *
-	 * @param array  $sites  Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
-	 * @param string $driver Opaque id of the tab driving the run (so it can reclaim it instantly after
-	 *                       a same-tab reload/navigation, without waiting out the two-tab guard).
+	 * @param array  $sites       Run sites keyed by site id: [ site_id => [ site_id, name, checks ] ].
+	 *                            A scoped run includes sites without visual checks (checks = 0):
+	 *                            they are updated but never screenshotted.
+	 * @param string $driver      Opaque id of the tab driving the run (so it can reclaim it instantly
+	 *                            after a same-tab reload/navigation, without waiting out the two-tab guard).
+	 * @param string $update_type Optional type scope of an Updates-page run ('' = legacy whole-site run).
+	 * @param array  $site_slugs  Optional per-site item slugs: [ site_id => string[] ] (empty list =
+	 *                            all items of the type). Only kept for tracked sites.
 	 * @return void
 	 */
-	public static function start_run( array $sites, string $driver = '' ): void {
+	public static function start_run( array $sites, string $driver = '', string $update_type = '', array $site_slugs = array() ): void {
 		self::save_run(
 			array(
 				'started_at'    => time(),
@@ -370,6 +353,10 @@ class WCD_MainWP_Update_Flow {
 				'phase'         => 'pre',
 				'driver'        => $driver,
 				'sites'         => $sites,
+				// Scoped (Updates-page) runs persist their type + per-site slugs so a resume
+				// re-applies the original selection and never installs more than the user picked.
+				'update_type'   => $update_type,
+				'site_slugs'    => array_intersect_key( $site_slugs, $sites ),
 				'pre_batches'   => array(),
 				'updated_sites' => array(),
 				'post_batches'  => array(),
@@ -480,7 +467,11 @@ class WCD_MainWP_Update_Flow {
 		}
 		$state['phase']                    = 'post';
 		$state['post_batches'][ $site_id ] = $batch;
-		if ( count( $state['post_batches'] ) >= count( $state['sites'] ) ) {
+		// Completion is measured against the sites that actually get a post batch, not against
+		// every tracked site: a scoped run also tracks sites without visual checks, which are
+		// updated but never screenshotted and would otherwise keep the run alive forever.
+		$expected = count( self::check_site_ids( $state ) );
+		if ( count( $state['post_batches'] ) >= max( 1, $expected ) ) {
 			self::clear_run();
 
 			return;

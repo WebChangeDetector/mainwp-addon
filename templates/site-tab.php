@@ -12,6 +12,7 @@ defined( 'ABSPATH' ) || exit;
 $wcd_mainwp_util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
 $wcd_mainwp_site_id = ( class_exists( $wcd_mainwp_util ) && method_exists( $wcd_mainwp_util, 'get_current_wpid' ) ) ? (int) $wcd_mainwp_util::get_current_wpid() : 0;
 $wcd_mainwp_token   = WCD_MainWP_Site_Settings::get_global();
+$wcd_mainwp_pending = WCD_MainWP_Site_Settings::pending_email();
 $wcd_mainwp_enabled = $wcd_mainwp_site_id && WCD_MainWP_Site_Map::is_enabled( $wcd_mainwp_site_id );
 // Token/account live on the extension page's Account tab; site enabling + URL selection on its
 // Settings tab.
@@ -36,6 +37,19 @@ $wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 				?>
 			</p>
 		</div>
+	<?php elseif ( '' !== $wcd_mainwp_pending ) : ?>
+		<div class="ui info message">
+			<p>
+				<?php
+				printf(
+					/* translators: 1: the signup email address, 2: Account tab URL. */
+					wp_kses_post( __( 'Activate your WebChange Detector account first: we sent an activation link to %1$s. Click it, then reload this page. Details on the <a href="%2$s">Account</a> tab.', 'webchangedetector-for-mainwp' ) ),
+					'<strong>' . esc_html( $wcd_mainwp_pending ) . '</strong>',
+					esc_url( $wcd_mainwp_account_page )
+				);
+				?>
+			</p>
+		</div>
 	<?php elseif ( ! $wcd_mainwp_enabled ) : ?>
 		<div class="ui info message">
 			<p>
@@ -53,9 +67,9 @@ $wcd_mainwp_settings     = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 		$wcd_mainwp_updates_count = WCD_MainWP_Update_Flow::pending_updates_count( array( $wcd_mainwp_site_id ) );
 		$wcd_mainwp_no_updates    = ( null !== $wcd_mainwp_updates_count && 0 === (int) $wcd_mainwp_updates_count );
 		?>
-		<p class="wcd-muted"><?php esc_html_e( 'Run a safe update for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector-for-mainwp' ); ?></p>
+		<p class="wcd-muted"><?php esc_html_e( 'Run WCD Updates for this site: capture before/after screenshots around the update and review the change detections.', 'webchangedetector-for-mainwp' ); ?></p>
 		<button type="button" class="ui green button wcd-safe-update<?php echo $wcd_mainwp_no_updates ? ' disabled' : ''; ?>" data-scope="site" data-site-id="<?php echo esc_attr( (string) $wcd_mainwp_site_id ); ?>" <?php disabled( $wcd_mainwp_no_updates ); ?>>
-			<i class="eye icon"></i> <?php esc_html_e( 'On-Demand Safe Update', 'webchangedetector-for-mainwp' ); ?>
+			<i class="eye icon"></i> <?php esc_html_e( 'Update with Checks', 'webchangedetector-for-mainwp' ); ?>
 		</button>
 		<a href="<?php echo esc_url( $wcd_mainwp_settings ); ?>" class="ui button"><?php esc_html_e( 'Configure URLs', 'webchangedetector-for-mainwp' ); ?></a>
 		<?php if ( $wcd_mainwp_no_updates ) : ?>

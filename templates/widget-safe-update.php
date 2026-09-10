@@ -4,8 +4,8 @@
  *
  * Rendered by WCD_MainWP_Widget::render_safe_update_metabox() as a draggable/hideable MainWP
  * metabox on the Operations dashboard and the individual child-site overview. It is the safe-update
- * entry point (decision -> preflight -> pre -> update -> post -> results), the same flow as the
- * Updates-page hero banner (templates/entry-banner.php) but in MainWP's own widget chrome so it
+ * entry point (decision -> preflight -> pre -> update -> post -> results), the same flow the
+ * Updates-page bar (templates/updates-bar.php) starts, but in MainWP's own widget chrome so it
  * blends in with the native dashboard widgets.
  *
  * Layout mirrors MainWP's own Recent Activity widget so the footer actions stay visible at ANY widget
@@ -15,8 +15,8 @@
  * the scroll area is the only flexible part, it shrinks and scrolls when the widget is resized short
  * instead of pushing the footer out of the (overflow:hidden) widget.
  *
- * It carries the same JS-contract hooks as the banner so assets/js/wcd-mainwp.js drives both
- * surfaces unchanged: the `.wcd-safe-update` CTA, the lazy `[data-role=pages|checks]` stats, the
+ * It carries the shared JS-contract hooks so assets/js/wcd-mainwp.js drives every entry surface
+ * unchanged: the `.wcd-safe-update` CTA, the lazy `[data-role=pages|checks]` stats, the
  * `data-stats-scope`/`data-site-id` container the `banner_stats` AJAX reads, and the `.wcd-run-host`
  * (the live run card itself plays out in a locked modal popup; the "Updates running" button in the
  * header slot reopens it while it is closed).

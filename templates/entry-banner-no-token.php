@@ -2,9 +2,9 @@
 /**
  * WebChange Detector setup hint banner (no API token yet).
  *
- * Rendered in place of the hero banner on the MainWP dashboard overview when no API token is
- * configured (see WCD_MainWP_Bootstrap::render_scoped_banner()). It replaces the previous silent
- * no-op so first-run users get an actionable next step: create an account and add the token.
+ * Rendered by the Safe Update dashboard widget (WCD_MainWP_Widget::render_safe_update_metabox())
+ * when no API token is configured, so first-run users get an actionable next step: create an
+ * account and add the token.
  *
  * @package WebChangeDetector_MainWP
  */
@@ -17,7 +17,7 @@ $wcd_mainwp_settings_url = WCD_MainWP_Bootstrap::tab_url( 'account' );
 	<div class="wcd-hero__icon"><i class="eye icon"></i></div>
 	<div class="wcd-hero__body">
 		<span class="wcd-hero__badge"><?php esc_html_e( 'WebChange Detector', 'webchangedetector-for-mainwp' ); ?></span>
-		<div class="wcd-hero__title"><?php esc_html_e( 'Connect WebChange Detector to start visual checks', 'webchangedetector-for-mainwp' ); ?></div>
+		<div class="wcd-hero__title"><?php esc_html_e( 'Set up WebChange Detector to start visual checks', 'webchangedetector-for-mainwp' ); ?></div>
 		<div class="wcd-hero__desc"><?php echo wp_kses_post( WCD_MainWP_Bootstrap::no_token_hint_html() ); ?></div>
 	</div>
 	<a class="ui primary button" href="<?php echo esc_url( $wcd_mainwp_settings_url ); ?>">

@@ -29,6 +29,16 @@
             var v = data[k];
             if (Array.isArray(v)) {
                 v.forEach(function (item) { body.append(k + '[]', item); });
+            } else if (v !== null && typeof v === 'object') {
+                // One nesting level for maps of lists (the Updates-page selection map):
+                // key[<sub>][]=item, which PHP parses natively. An empty list still appends one
+                // empty item so the sub-key survives the round trip (core rows have no slugs;
+                // the server drops empty slug entries but keeps the site key).
+                Object.keys(v).forEach(function (sub) {
+                    var list = Array.isArray(v[sub]) ? v[sub] : [];
+                    if (!list.length) { body.append(k + '[' + sub + '][]', ''); return; }
+                    list.forEach(function (item) { body.append(k + '[' + sub + '][]', item); });
+                });
             } else if (v !== undefined && v !== null) {
                 body.set(k, v);
             }
@@ -520,6 +530,12 @@
     // (its own close icon + Cancel button), so it does NOT go through the run-only modal infra. The
     // JS fills the fields from get_site_settings on open and writes them via save_site_settings.
 
+    // Placeholder shown in the password field when a password is already stored (the API never
+    // returns the real one). Mirrors the webapp's dots convention: leave the dots to keep the stored
+    // password, clear the field to remove it, type a new value to replace it. The sentinel logic
+    // lives ONLY here (in JS); the save endpoint stays contract-simple (set / clear / omit).
+    var PWD_SENTINEL = '••••••••';
+
     function settingsModal() { return document.getElementById('wcd-site-settings-modal'); }
 
     function showSettingsModal(modal) {
@@ -549,8 +565,9 @@
         if (wrap) { wrap.classList.toggle('checked', !!checked); }
     }
 
-    // Fill the modal fields from the server payload. has_basic_auth drives the "password is set"
-    // hint + the "Remove password" affordance (the password itself is never returned).
+    // Fill the modal fields from the server payload. has_basic_auth drives the "password is stored"
+    // hint + the sentinel dots in the password field (the password itself is never returned). The
+    // prior "was set" state is recorded on the modal for the save decision.
     function fillSettings(modal, data) {
         var region = settingsField(modal, 'screenshot_region');
         if (region) { region.value = data.screenshot_region || 'auto'; }
@@ -558,11 +575,14 @@
         setCheckbox(settingsField(modal, 'default_mobile'), data.default_mobile);
         var threshold = settingsField(modal, 'threshold');
         if (threshold) { threshold.value = (data.threshold !== undefined && data.threshold !== null) ? data.threshold : ''; }
+        var alertEmails = settingsField(modal, 'alert_emails');
+        if (alertEmails) { alertEmails.value = data.alert_emails || ''; }
         var authUser = settingsField(modal, 'basic_auth_user');
         if (authUser) { authUser.value = data.basic_auth_user || ''; }
+        // A stored password shows the sentinel dots (leave to keep, clear to remove, type to replace).
         var authPass = settingsField(modal, 'basic_auth_password');
-        if (authPass) { authPass.value = ''; }
-        setCheckbox(settingsField(modal, 'basic_auth_password_clear'), false);
+        if (authPass) { authPass.value = data.has_basic_auth ? PWD_SENTINEL : ''; }
+        modal.setAttribute('data-password-set', data.has_basic_auth ? '1' : '0');
         setPasswordSetState(modal, !!data.has_basic_auth);
         setCheckbox(settingsField(modal, 'proxy_on'), data.proxy_on);
         var delay = settingsField(modal, 'screenshot_delay');
@@ -575,9 +595,7 @@
 
     function setPasswordSetState(modal, isSet) {
         var hint = modal.querySelector('[data-role="passwordset"]');
-        var remove = modal.querySelector('[data-role="passwordremove"]');
         if (hint) { hint.hidden = !isSet; }
-        if (remove) { remove.hidden = !isSet; }
     }
 
     function onSiteSettings(button) {
@@ -587,9 +605,16 @@
         if (!modal) { return; }
 
         modal.setAttribute('data-site-id', String(siteId));
+        // The modal element is reused for every site, so the previous site's values are still in
+        // the fields until fillSettings() overwrites them. data-loaded marks "these fields belong
+        // to data-site-id"; it is cleared on every open and set only after a successful fill, and
+        // onSaveSiteSettings() refuses to save without it. Hiding the form alone would not do:
+        // the Save button lives in the modal's .actions block, outside the form.
+        modal.removeAttribute('data-loaded');
         var loading = modal.querySelector('[data-role="loading"]');
         var form = modal.querySelector('[data-role="form"]');
         var error = modal.querySelector('[data-role="error"]');
+        var save = modal.querySelector('.wcd-settings-save');
         // The Save control is type="button" and the JS reads fields by name (it never submits the
         // form), so block any real form submission once: Enter must never trigger a full page reload,
         // even if the field count ever drops below the browser's implicit-submit suppression.
@@ -600,12 +625,19 @@
         if (error) { error.hidden = true; error.textContent = ''; }
         if (loading) { loading.hidden = false; }
         if (form) { form.hidden = true; }
+        if (save) { save.disabled = true; }
         showSettingsModal(modal);
 
         api('get_site_settings', { site_id: siteId }).then(function (data) {
+            // Ignore a response that no longer belongs to the site the modal shows: the user can
+            // close this modal mid-load and reopen it for another site, and filling site A's values
+            // into site B's form (data-loaded included) would silently save them onto B's group.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             fillSettings(modal, data);
+            modal.setAttribute('data-loaded', '1');
             if (loading) { loading.hidden = true; }
             if (form) { form.hidden = false; }
+            if (save) { save.disabled = false; }
             // Init the accordion (collapsed) once the form is visible.
             if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.accordion === 'function') {
                 window.jQuery(modal).find('.wcd-settings-advanced').accordion({ exclusive: false });
@@ -614,10 +646,16 @@
                 window.jQuery(modal).find('.ui.dropdown').dropdown();
             }
         }).catch(function (e) {
+            // Same stale-response guard as above: a late failure for a previous site must not close
+            // the modal or show its error over the form another site has already loaded.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             if (handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
+            // Form and Save stay locked: the fields were never filled for this site, so saving
+            // them would write empty or previous-site values (an empty alert_emails clears the
+            // recipient list, an empty basic auth user clears it, and a previous site's threshold
+            // would be written to this one).
             if (loading) { loading.hidden = true; }
             if (error) { error.hidden = false; error.textContent = e.message; }
-            if (form) { form.hidden = false; }
         });
     }
 
@@ -626,15 +664,17 @@
         if (!modal) { return; }
         var siteId = parseInt(modal.getAttribute('data-site-id'), 10) || 0;
         if (!siteId) { return; }
+        // Refuse to save fields that were never loaded for this site (see onSiteSettings).
+        if ('1' !== modal.getAttribute('data-loaded')) { return; }
         var card = document.querySelector('.wcd-site[data-site-id="' + siteId + '"]');
         var error = modal.querySelector('[data-role="error"]');
         if (error) { error.hidden = true; error.textContent = ''; }
 
         var region = settingsField(modal, 'screenshot_region');
         var threshold = settingsField(modal, 'threshold');
+        var alertEmails = settingsField(modal, 'alert_emails');
         var authUser = settingsField(modal, 'basic_auth_user');
         var authPass = settingsField(modal, 'basic_auth_password');
-        var clear = settingsField(modal, 'basic_auth_password_clear');
         var delay = settingsField(modal, 'screenshot_delay');
         var css = settingsField(modal, 'css');
         var js = settingsField(modal, 'js');
@@ -645,27 +685,45 @@
             default_desktop: (settingsField(modal, 'default_desktop') || {}).checked ? 1 : 0,
             default_mobile: (settingsField(modal, 'default_mobile') || {}).checked ? 1 : 0,
             threshold: threshold ? threshold.value : '',
+            // Always sent: an emptied field clears the recipient list server-side.
+            alert_emails: alertEmails ? alertEmails.value : '',
             basic_auth_user: authUser ? authUser.value : '',
             proxy_on: (settingsField(modal, 'proxy_on') || {}).checked ? 1 : 0,
             screenshot_delay: delay ? delay.value : '',
             css: css ? css.value : '',
             js: js ? js.value : ''
         };
-        // Password: send the value only when the user typed one; send the clear flag when "Remove
-        // password" is ticked. Otherwise omit both so the stored password is left unchanged.
-        if (clear && clear.checked) {
-            payload.basic_auth_password_clear = 1;
-        } else if (authPass && authPass.value !== '') {
-            payload.basic_auth_password = authPass.value;
+        // Password (dots convention; sentinel logic lives only here, the API stays set/clear/omit):
+        //   was set + field still the sentinel  -> unchanged -> omit the key
+        //   was set + field emptied             -> clear     -> send ''
+        //   field holds a new value             -> set       -> send that value
+        //   was not set + field empty           -> nothing   -> omit
+        var wasSet = modal.getAttribute('data-password-set') === '1';
+        var passValue = authPass ? authPass.value : '';
+        if (wasSet) {
+            if (passValue !== PWD_SENTINEL) { payload.basic_auth_password = passValue; }
+        } else if (passValue !== '') {
+            payload.basic_auth_password = passValue;
         }
 
         button.disabled = true;
         api('save_site_settings', payload).then(function () {
+            // Same stale-response guard as the load path: the modal stays closable while the save
+            // is in flight, so site A's late success would otherwise tear down the modal site B has
+            // meanwhile opened.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             hideSettingsModal(modal);
         }).catch(function (e) {
+            // Same reason: site A's failure must neither close site B's modal nor print site A's
+            // error message over the form site B has loaded.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             if (card && handleUnlinked(card, e)) { hideSettingsModal(modal); return; }
             if (error) { error.hidden = false; error.textContent = e.message; }
         }).finally(function () {
+            // Guarded too, because the Save button belongs to the one reused modal: re-enabling it
+            // for site A would hand site B a second submit while B's own save is still running.
+            // Reopening the modal always resets the button, so skipping this cannot strand it.
+            if (String(siteId) !== modal.getAttribute('data-site-id')) { return; }
             button.disabled = false;
         });
     }
@@ -766,20 +824,112 @@
     // Entry is our own "Run visual check & update" button, so the run is always WITH WebChange
     // Detector (no with/without decision step). The button goes straight to the preflight.
 
-    function preflightArgs(scope, siteId) {
-        return scope === 'site' && siteId ? { site_id: siteId } : {};
+    // updatesScope (optional) carries the Updates-page bar's scoping: { update_type, mode,
+    // selection }. mode 'all' sends only the type (the server derives sites + items from the
+    // pending-update columns); 'selected' sends the checkbox selection map.
+    function preflightArgs(scope, siteId, updatesScope) {
+        var args = scope === 'site' && siteId ? { site_id: siteId } : {};
+        if (updatesScope && updatesScope.update_type) {
+            args.update_type = updatesScope.update_type;
+            if ('all' === updatesScope.mode) { args.mode = 'all'; }
+            else if (updatesScope.selection) { args.selection = updatesScope.selection; }
+        }
+        return args;
     }
 
-    // Locate the in-card run host that belongs to the clicked trigger. The Updates-page banner
-    // (entry-banner.php) renders the .wcd-run-host right after its .wcd-hero; the dashboard widget
-    // (widget-safe-update.php) has no .wcd-hero, so we fall back to the page's single .wcd-run-host
-    // (at most one entry point renders per page).
-    function runHostFor(trigger) {
-        var hero = trigger && trigger.closest ? trigger.closest('.wcd-hero') : null;
-        if (hero && hero.nextElementSibling && hero.nextElementSibling.classList.contains('wcd-run-host')) {
-            return hero.nextElementSibling;
-        }
+    // Locate the in-card run host (the reopen-button fallback slot). Overview pages can host
+    // more than one (our own widget + the WCD Updates card in MainWP's native Updates Overview
+    // widget); all hosts are equivalent fallbacks, the first one in the DOM wins.
+    function runHostFor() {
         return document.querySelector('.wcd-run-host');
+    }
+
+    /* ── Updates-page selection reader (Update Selected with Checks) ──────── */
+    // MainWP marks each selectable update row with updated="0" and a `.child.checkbox`; the site id
+    // and the item slug live on the row itself or an ancestor (tr/tbody), which covers all three
+    // view modes (Per Site / Per Group / Per Item) via closest(). plugin_slug/theme_slug are
+    // rawurlencode()d by MainWP, so they MUST be decoded or the server-side slug filter matches
+    // nothing; translation_slug is plain. Core rows carry no slug (site-level selection).
+
+    var UPDATES_SLUG_ATTRS = { plugins: 'plugin_slug', themes: 'theme_slug', translations: 'translation_slug' };
+    var UPDATES_SLUG_ENCODED = { plugins: true, themes: true, translations: false };
+
+    // Site Updates subpage: native tab name (data-tab) -> our update type. Tabs we cannot
+    // safe-update (abandoned plugins/themes, database updates) are absent on purpose.
+    var SITE_TAB_TYPES = { wordpress: 'core', plugins: 'plugins', themes: 'themes', translations: 'translations' };
+
+    // Returns the selection map { siteId: [slugs] } for one update type. Scope: the explicit
+    // `root` element when given (site subpage: the ACTIVE tab, since all type tables are in the
+    // DOM at once there), else the bar's enclosing tab (global Updates page: exactly one tab
+    // renders per pageload). Duplicate rows (Per Group repeats a site's rows per group) are
+    // deduped per site.
+    function readUpdatesSelection(bar, updateType, root) {
+        var tab = root || (bar && bar.closest && bar.closest('.ui.tab')) || document;
+        var attr = UPDATES_SLUG_ATTRS[updateType] || '';
+        var sites = {};
+        tab.querySelectorAll('tr[updated="0"]').forEach(function (row) {
+            var box = row.querySelector('.child.checkbox input[type="checkbox"]');
+            if (!box || !box.checked) { return; }
+            var siteEl = row.closest('[site_id]');
+            var siteId = siteEl ? parseInt(siteEl.getAttribute('site_id'), 10) : 0;
+            if (!siteId) { return; }
+            if (!attr) {
+                // core: the site itself is the selection (no slugs).
+                if (!sites[siteId]) { sites[siteId] = []; }
+                return;
+            }
+            var slugEl = row.closest('[' + attr + ']');
+            var slug = slugEl ? (slugEl.getAttribute(attr) || '') : '';
+            if (UPDATES_SLUG_ENCODED[updateType]) {
+                try { slug = decodeURIComponent(slug); } catch (e) { /* keep the raw value */ }
+            }
+            // Only a resolved slug may create the site's bucket: an empty slugs list would mean
+            // "all items of this type" server-side, silently escalating the selection.
+            if (!slug) { return; }
+            if (!sites[siteId]) { sites[siteId] = []; }
+            if (sites[siteId].indexOf(slug) === -1) { sites[siteId].push(slug); }
+        });
+        return sites;
+    }
+
+    // The site Updates subpage's currently active tab name (data-tab). One resolution path for
+    // both the click-time type lookup and the bar's initial visibility: the native tab menu item
+    // first (scoped, immune to third-party .ui.tab elements), the active tab pane as fallback.
+    function activeSiteTabName() {
+        var active = document.querySelector('.select-individual-updates .item.active')
+            || document.querySelector('.ui.tab.active[data-tab]');
+        return active ? (active.getAttribute('data-tab') || '') : '';
+    }
+
+    // Site Updates subpage only (the inline bar marker exists there): keep the bar in sync with
+    // the native client-side tab switcher. On tabs we cannot safe-update (abandoned plugins/
+    // themes, database updates) the WHOLE bar hides; on updatable tabs "Update Selected with
+    // Checks" only shows where a checkbox table exists (plugins/themes; core and translations
+    // have none on this subpage, matching the native Selected buttons). Uses the `hidden` class
+    // like the native buttons (a small own CSS rule makes it stick against Fomantic's .ui.button
+    // display).
+    function initSiteUpdatesBar() {
+        var bar = document.querySelector('.wcd-updates-bar--inline');
+        if (!bar) { return; }
+        var selectedBtn = bar.querySelector('.wcd-updates-run[data-mode="selected"]');
+        var allBtn = bar.querySelector('.wcd-updates-run[data-mode="all"]');
+
+        function applyTab(tabName) {
+            var type = SITE_TAB_TYPES[tabName] || '';
+            var hasCheckboxes = 'plugins' === tabName || 'themes' === tabName;
+            bar.classList.toggle('hidden', !type);
+            if (selectedBtn) { selectedBtn.classList.toggle('hidden', !hasCheckboxes); }
+            if (allBtn) { allBtn.classList.toggle('hidden', !type); }
+        }
+
+        // The native switcher is a Fomantic dropdown whose items carry data-tab; delegate so the
+        // toggle also works after Fomantic re-renders the menu.
+        document.addEventListener('click', function (e) {
+            var item = e.target.closest && e.target.closest('.select-individual-updates .item');
+            if (item) { applyTab(item.getAttribute('data-tab') || ''); }
+        });
+
+        applyTab(activeSiteTabName());
     }
 
     function plural(n, one, many) { return 1 === n ? one : many; }
@@ -795,15 +945,15 @@
 
     // Confirm-only preflight: a summary strip, credit coverage, an expandable update list and the
     // per-site URL list. On confirm the modal closes and the run plays out in the in-card host.
-    function runPreflight(trigger, scope, siteId) {
-        var host  = runHostFor(trigger);
+    function runPreflight(trigger, scope, siteId, updatesScope) {
+        var host  = runHostFor();
         var modal = openModal();
         modalHead(modal, t('preflightTitle'));
         var body = el('div', { class: 'scrolling content' });
         body.appendChild(el('div', { class: 'ui active inline loader' }));
         modal.appendChild(body);
 
-        api('preflight', preflightArgs(scope, siteId)).then(function (data) {
+        api('preflight', preflightArgs(scope, siteId, updatesScope)).then(function (data) {
             body.innerHTML = '';
             var sites = data.sites || [];
             // Only sites with pending updates participate in the run; a missing flag (older
@@ -818,7 +968,7 @@
                 body.appendChild(el('p', { class: 'wcd-muted', text: t('noSites') }));
                 return;
             }
-            buildPreflight(modal, body, data, checkSites, runSites, sites, host, trigger);
+            buildPreflight(modal, body, data, checkSites, runSites, sites, host, trigger, updatesScope);
         }).catch(function (e) {
             body.innerHTML = '';
             body.appendChild(el('p', { class: 'wcd-error', text: e.message }));
@@ -838,7 +988,8 @@
 
     // runSites = sites with pending updates (the run set); allSites additionally holds the
     // skipped sites without updates, rendered greyed out for transparency (display only).
-    function buildPreflight(modal, body, data, checkSites, runSites, allSites, host, trigger) {
+    // updatesScope (optional) is the Updates-page bar scoping, handed on to the run.
+    function buildPreflight(modal, body, data, checkSites, runSites, allSites, host, trigger, updatesScope) {
         body.appendChild(el('p', { class: 'wcd-pf-lead', text: t('preflightLead') }));
 
         // summary strip
@@ -913,6 +1064,19 @@
         checkSites.forEach(function (s) {
             list.appendChild(buildPreflightSite(s));
         });
+        // Run sites without visual checks activated (wcd_enabled === false, Updates-page selection
+        // flow): static badged rows. They ARE updated, but never get pre/post screenshots (their
+        // checks are 0, so take_pre/take_post and the credit math exclude them automatically).
+        var disabledSites = runSites.filter(function (s) { return false === s.wcd_enabled; });
+        disabledSites.forEach(function (s) {
+            list.appendChild(el('div', { class: 'wcd-pf-site' }, [
+                el('div', { class: 'wcd-pf-urlshead is-skipped' }, [
+                    el('span', { class: 'wcd-run__sitemark', text: initials(s.name) }),
+                    el('span', { class: 'wcd-pf-urlname', text: s.name }),
+                    el('span', { class: 'wcd-pf-urlcount', text: t('checksNotActivated') })
+                ])
+            ]));
+        });
         // Skipped sites (no pending updates): static greyed rows without accordion behavior;
         // they are not part of the run, the badge explains why.
         allSites.filter(function (s) { return false === s.has_updates; }).forEach(function (s) {
@@ -936,8 +1100,10 @@
             ]));
         }
 
-        // unchecked note (run sites that stay live without screenshots)
-        var unchecked = runSites.length - checkSites.length;
+        // unchecked note: ENABLED run sites with zero selected checks (they stay live without
+        // screenshots). Sites without activated checks are excluded: they already carry their own
+        // "Checks not activated" badge above, so counting them here would double-report them.
+        var unchecked = runSites.length - checkSites.length - disabledSites.length;
         if (unchecked > 0) {
             body.appendChild(el('p', { class: 'wcd-muted wcd-pf-note' }, [
                 el('i', { class: 'info circle icon' }),
@@ -960,7 +1126,7 @@
         ]);
         confirm.disabled = !enough;
         // The run card replaces the preflight in the SAME (already open) modal; the modal stays open.
-        confirm.addEventListener('click', function () { startRun(host, trigger, runSites); });
+        confirm.addEventListener('click', function () { startRun(host, trigger, runSites, updatesScope); });
         foot.appendChild(confirm);
         modal.appendChild(foot);
     }
@@ -1196,11 +1362,20 @@
         return loop();
     }
 
-    function runUpdatesSequential(sites) {
+    // updatesScope (optional) scopes each site's update to the run's type + its selected slugs
+    // (fresh run: the selection map; resumed run: the slugs persisted on the site entries). No
+    // slugs sent = all items of the type; no updatesScope = legacy whole-site update.
+    function runUpdatesSequential(sites, updatesScope) {
         return sites.reduce(function (chain, s) {
             return chain.then(function () {
+                var payload = { site_id: s.site_id };
+                if (updatesScope && updatesScope.update_type) {
+                    payload.update_type = updatesScope.update_type;
+                    var slugs = (updatesScope.selection && updatesScope.selection[s.site_id]) || s.slugs || [];
+                    if (slugs.length) { payload.slugs = slugs; }
+                }
                 // Tolerate a per-site update failure (e.g. offline): the post screenshots still run.
-                return api('run_update', { site_id: s.site_id }).catch(function () {});
+                return api('run_update', payload).catch(function () {});
             });
         }, Promise.resolve());
     }
@@ -1220,24 +1395,36 @@
         }, Promise.resolve()).then(function () { return flagged; });
     }
 
-    function startRun(host, trigger, sites) {
+    function startRun(host, trigger, sites, updatesScope) {
         if (activeRun) { return; }
         activeRun = true;
-        setTriggerRunning(trigger, true);
+        setAllTriggersRunning(true);
         var single     = 1 === sites.length;
         var checkSites = sites.filter(function (s) { return s.checks > 0; });
         var total      = checkSites.reduce(function (n, s) { return n + s.checks; }, 0);
         var run = mountRun(host, trigger, sites, checkSites, single, total, true);   // fresh run: open the popup now
+        run.updatesScope = updatesScope || null;
         startHeartbeat();
         // Track the run server-side so it can be resumed if this tab disappears mid-run.
         // Best effort: a failed tracking call must not block the run itself.
-        var tracking = api('run_start', {
+        // EVERY run site is tracked, not just the check sites: this run updates all of them (a
+        // scoped Updates-page run deliberately includes sites without activated visual checks), so
+        // an untracked site would be silently skipped by a resume while the card still says "Done".
+        // Their checks are 0, and every screenshot phase runs off the check-site list, so widening
+        // the tracked set never adds a screenshot, a check, or a credit.
+        var tracking = {
             driver: driverId(),
-            site_ids: checkSites.map(function (s) { return s.site_id; }),
-            names: checkSites.map(function (s) { return s.name; }),
-            checks: checkSites.map(function (s) { return s.checks; })
-        }).catch(function () {});
-        tracking.then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
+            site_ids: sites.map(function (s) { return s.site_id; }),
+            names: sites.map(function (s) { return s.name; }),
+            checks: sites.map(function (s) { return s.checks; })
+        };
+        if (updatesScope && updatesScope.update_type) {
+            // Persist the scope so a resume re-applies the original selection.
+            tracking.update_type = updatesScope.update_type;
+            if (updatesScope.selection) { tracking.selection = updatesScope.selection; }
+        }
+        api('run_start', tracking).catch(function () {})
+            .then(function () { return runPhased(run); }).catch(function (e) { failRun(run, e); });
     }
 
     // Build the run card INSIDE the modal and render the "Updates running" reopen button next to the
@@ -1274,8 +1461,8 @@
 
     /* ── "Updates running" reopen button (next to the widget heading) ───────── */
     // While the run popup is closed, this button keeps the run reachable: clicking it reopens the
-    // popup. It renders into the header slot (`.wcd-run-reopen-slot`) on the widget; on the Updates
-    // banner, which has no such slot, it falls back to the run-host below the banner.
+    // popup. It renders into the header slot (`.wcd-run-reopen-slot`) on the widget; the Updates
+    // bar and per-site tab have no such slot, so it falls back to their run-host.
 
     function reopenSlot(run) {
         return document.querySelector('.wcd-run-reopen-slot') || run.host || null;
@@ -1325,6 +1512,26 @@
         var preBatchBySite = {}, postBatchBySite = {};
         var total = run.total;
 
+        // Defense in depth: with ZERO check sites, take_pre/take_post would send an empty
+        // site_ids array, which api() drops entirely (empty arrays append nothing), and the
+        // server's legacy fallback (scope_site_ids) would then dispatch screenshots for ALL
+        // enabled sites and burn credits. Currently unreachable (the preflight aborts with
+        // t('noSites') before startRun, and resume only tracks checks>0 sites), but if it is
+        // ever reached the run must install updates only: PRE -> UPDATES -> DONE, no take/poll.
+        if (!run.checkSites.length) {
+            setPhase(run, 0);
+            setShot(run.pre, { queue: 0, processing: 0, done: 0, failed: 0 });
+            setPhase(run, 1);
+            setFill(run, 1 / 3);
+            return runUpdatesSequential(run.sites, run.updatesScope).then(function () {
+                // Nothing left to screenshot server-side: stop tracking the run. Best effort.
+                api('run_discard', {}).catch(function () {});
+                setShot(run.post, { queue: 0, processing: 0, done: 0, failed: 0 });
+                setPhase(run, 3);
+                finishRun(run, {});
+            });
+        }
+
         // PRE
         setPhase(run, 0);
         // Show everything as queued straight away so the panel isn't 0/0/0/0 until the first poll.
@@ -1345,7 +1552,7 @@
             // UPDATES
             setPhase(run, 1);
             setFill(run, 1 / 3);
-            return runUpdatesSequential(run.sites);
+            return runUpdatesSequential(run.sites, run.updatesScope);
         }).then(function () {
             // POST
             setPhase(run, 2);
@@ -1381,7 +1588,7 @@
     function finishRun(run, flagged) {
         activeRun = false;
         stopHeartbeat();
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         run.card.setAttribute('data-state', 'done');
         run.dismiss.disabled = false;
         RUN_STEPS.forEach(function (st) { run.stepNodes[st.id].className = 'wcd-run__step is-done'; });
@@ -1456,7 +1663,7 @@
         activeRun = true;
         startHeartbeat();
         renderReopenButton(run, 'green', 'sync loading icon', t('reopenRunning'));
-        setTriggerRunning(run.trigger, true);
+        setAllTriggersRunning(true);
         run.card.setAttribute('data-state', 'running');
         run.dismiss.disabled = true;
         run.pill.className = 'wcd-run__pill is-running';
@@ -1513,7 +1720,7 @@
     // this tab (the user explicitly wants to see it) and opens the popup.
     var resumePendingShown = false;
     function showResumePending(host, state) {
-        setTriggerRunning(document.querySelector('.wcd-safe-update'), true);
+        setAllTriggersRunning(true);
         var slot = document.querySelector('.wcd-run-reopen-slot') || host;
         if (!slot) { return; }
         var btn = el('button', { class: 'ui small green button wcd-reopen', type: 'button' }, [
@@ -1534,27 +1741,38 @@
         resumePendingShown = false;
         var pending = document.querySelector('.wcd-reopen-wrap[data-pending]');
         if (pending && pending.parentNode) { pending.parentNode.innerHTML = ''; }
-        setTriggerRunning(document.querySelector('.wcd-safe-update'), false);
+        setAllTriggersRunning(false);
     }
 
     // Rebuild the run card from the persisted state and continue at its phase. The tracked sites are
-    // exactly the run's check sites (run_start only records sites with checks).
+    // ALL sites of the run: a scoped (Updates-page) run also covers sites without activated visual
+    // checks, which must still be updated by the resume. Screenshots stay restricted to the sites
+    // with checks > 0, so every take_pre / take_post below runs off checkSites, never off sites.
     function resumeRun(host, state) {
         if (activeRunRef || activeRun) { return; }   // a takeover is already under way in this tab
         var sites = (state.sites || []).map(function (s) {
-            return { site_id: parseInt(s.site_id, 10), name: s.name || '', checks: Number(s.checks) || 0 };
+            return {
+                site_id: parseInt(s.site_id, 10),
+                name: s.name || '',
+                checks: Number(s.checks) || 0,
+                // Persisted item slugs of a scoped (Updates-page) run; empty = all of the type.
+                slugs: (s.slugs || []).map(String)
+            };
         }).filter(function (s) { return s.site_id; });
         if (!sites.length) { return; }
 
         activeRun = true;
         resumePendingShown = false;   // the live run card now owns the slot
-        var single  = 1 === sites.length;
-        var total   = sites.reduce(function (n, s) { return n + s.checks; }, 0);
-        var trigger = document.querySelector('.wcd-safe-update');
-        setTriggerRunning(trigger, true);   // disable the CTA so a re-click cannot wipe the resumed card
+        var single     = 1 === sites.length;
+        var checkSites = sites.filter(function (s) { return s.checks > 0; });
+        var total      = checkSites.reduce(function (n, s) { return n + s.checks; }, 0);
+        var trigger = document.querySelector('.wcd-safe-update, .wcd-updates-run');
+        setAllTriggersRunning(true);   // disable the CTAs so a re-click cannot wipe the resumed card
         // A resumed run plays out in the background: do NOT pop the modal open on its own. The
         // "Updates running" button next to the widget heading lets the user open it when they want.
-        var run = mountRun(host, trigger, sites, sites, single, total, false);
+        var run = mountRun(host, trigger, sites, checkSites, single, total, false);
+        // Re-apply a scoped run's update type; the per-site slugs ride on the site entries.
+        run.updatesScope = state.update_type ? { update_type: state.update_type } : null;
         startHeartbeat();
 
         run.preBatches = values(state.pre_batches || {});
@@ -1577,15 +1795,16 @@
         // UPDATES: pre done; finish the remaining updates, then post.
         if ('updates' === state.phase) {
             setShot(run.pre, { queue: 0, processing: 0, done: total, failed: 0 });
-            resumeUpdatesThenPost(run, sites, notUpdated).catch(function (e) { failRun(run, e); });
+            resumeUpdatesThenPost(run, notUpdated).catch(function (e) { failRun(run, e); });
             return;
         }
 
         // PRE (default): finish the pre screenshots (take any still missing, poll all), then continue.
+        // Only check sites can be missing a pre screenshot; the others never had one.
         setPhase(run, 0);
         var preBatchBySite = {};
         Object.keys(state.pre_batches || {}).forEach(function (k) { preBatchBySite[k] = state.pre_batches[k]; });
-        var missingPre = sites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
+        var missingPre = checkSites.filter(function (s) { return !preBatchBySite[s.site_id]; }).map(function (s) { return s.site_id; });
         var ensurePre = missingPre.length
             ? api('take_pre', { site_ids: missingPre }).then(function (d) {
                 Object.keys(d.batches || {}).forEach(function (k) { preBatchBySite[k] = d.batches[k]; });
@@ -1601,20 +1820,33 @@
             });
         }).then(function (final) {
             setShot(run.pre, final || { queue: 0, processing: 0, done: total, failed: 0 });
-            return resumeUpdatesThenPost(run, sites, notUpdated);
+            return resumeUpdatesThenPost(run, notUpdated);
         }).catch(function (e) { failRun(run, e); });
     }
 
     // Shared tail for a resumed run: update the not-yet-updated sites, then take + poll the post phase.
-    function resumeUpdatesThenPost(run, sites, notUpdated) {
+    // Credit-safe twice over: only the notUpdated sites are updated again (scoped to the run's
+    // persisted type + slugs), and only the run's check sites are screenshotted.
+    function resumeUpdatesThenPost(run, notUpdated) {
         setPhase(run, 1);
         setFill(run, 1 / 3);
-        return runUpdatesSequential(notUpdated).then(function () {
+        return runUpdatesSequential(notUpdated, run.updatesScope).then(function () {
+            // A scoped run can consist of sites WITHOUT visual checks only. There is nothing to
+            // screenshot then, and take_post with an empty site list would fail the run, so finish
+            // right after the updates (mirrors the same guard in runPhased).
+            if (!run.checkSites.length) {
+                api('run_discard', {}).catch(function () {});
+                setShot(run.post, { queue: 0, processing: 0, done: 0, failed: 0 });
+                setPhase(run, 3);
+                finishRun(run, {});
+                return null;
+            }
             setPhase(run, 2);
             setFill(run, 2 / 3);
             setShot(run.post, { queue: run.total, processing: 0, done: 0, failed: 0 });
-            return api('take_post', { site_ids: sites.map(function (s) { return s.site_id; }) });
+            return api('take_post', { site_ids: run.checkSites.map(function (s) { return s.site_id; }) });
         }).then(function (d) {
+            if (!d) { return null; }
             // Every post batch is dispatched: stop tracking (the rest finishes server-side).
             api('run_discard', {}).catch(function () {});
             return runPostPhase(run, d.batches || {});
@@ -1624,7 +1856,7 @@
     function failRun(run, e) {
         activeRun = false;
         stopHeartbeat();
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         run.card.setAttribute('data-state', 'error');
         run.dismiss.disabled = false;
         // Stop the spinner pill and flag the step that was in flight.
@@ -1649,13 +1881,22 @@
         removeReopenButton(run);
         activeRunRef = null;
         activeRun = false;
-        setTriggerRunning(run.trigger, false);
+        setAllTriggersRunning(false);
         clearModalContent();
         closeModal();
         api('run_discard', {}).catch(function () {});
     }
 
-    // Reflect the run state on the launch CTA (spinner + disabled while a run is active).
+    // Lock/unlock every safe-update entry trigger on the page (the widget/tab `.wcd-safe-update`
+    // CTA and both Updates-page bar `.wcd-updates-run` buttons): a run started from or driven by
+    // any surface must block them all, or the unlocked sibling could open a second preflight.
+    function setAllTriggersRunning(running) {
+        document.querySelectorAll('.wcd-safe-update, .wcd-updates-run').forEach(function (node) {
+            setTriggerRunning(node, running);
+        });
+    }
+
+    // Reflect the run state on one launch CTA (spinner + disabled while a run is active).
     function setTriggerRunning(trigger, running) {
         if (!trigger) { return; }
         // Idempotent: never re-capture the restore label while already running (a second true call
@@ -1682,21 +1923,24 @@
         if (!e.target.classList) { return; }
         if (e.target.classList.contains('wcd-site-toggle')) {
             onToggleSite(e.target);
-        } else if (e.target.name === 'basic_auth_password_clear') {
-            // Ticking "Remove password" clears + disables the password input (the saved password
-            // will be removed); unticking re-enables it.
-            var modal = settingsModal();
-            var pass = modal ? settingsField(modal, 'basic_auth_password') : null;
-            if (pass) { if (e.target.checked) { pass.value = ''; } pass.disabled = e.target.checked; }
         }
     });
 
-    /* ───────────────────────── Hero banner stats ───────────────────────── */
+    // Focusing the password field while it still shows the sentinel dots selects them, so the first
+    // keystroke replaces the placeholder (rather than appending to it) while an untouched field still
+    // counts as "unchanged". Delegated so it works for the one reused settings modal.
+    document.addEventListener('focusin', function (e) {
+        if (e.target && e.target.name === 'basic_auth_password' && e.target.value === PWD_SENTINEL) {
+            e.target.select();
+        }
+    });
+
+    /* ───────────────────────── Widget stats ────────────────────────────── */
 
     // Fill the Pages/Checks stats once the dashboard has rendered (kept off the page-load path).
-    // Matches the Updates-page hero banner (.wcd-hero) and the dashboard safe-update widget
-    // (the [data-stats-scope] container inside its mainwp-scrolly-overflow); both carry
-    // data-stats-scope. At most one exists per page.
+    // Matches the dashboard safe-update widget's [data-stats-scope] container (inside its
+    // mainwp-scrolly-overflow). At most one exists per page; the Updates-page bar has no stats
+    // container, so this is a clean no-op there.
     function loadBannerStats() {
         var hero = document.querySelector('[data-stats-scope]');
         if (!hero) { return; }
@@ -1916,6 +2160,7 @@
     function onReady() {
         loadBannerStats();
         initRuns();
+        initSiteUpdatesBar();
         checkResume();
     }
 
@@ -1942,6 +2187,7 @@
         var settingsSave = e.target.closest && e.target.closest('.wcd-settings-save');
         var settingsCancel = e.target.closest && e.target.closest('.wcd-settings-cancel');
         var safe = e.target.closest && e.target.closest('.wcd-safe-update');
+        var updatesRun = e.target.closest && e.target.closest('.wcd-updates-run');
         var activateAll = e.target.closest && e.target.closest('.wcd-activate-all');
 
         if (tokenReset) {
@@ -1972,6 +2218,44 @@
             var scope = safe.getAttribute('data-scope') || 'bulk';
             var siteId = parseInt(safe.getAttribute('data-site-id'), 10) || 0;
             runPreflight(safe, scope, siteId);
+            return;
+        }
+        if (updatesRun) {
+            e.preventDefault();
+            if (updatesRun.disabled || updatesRun.classList.contains('is-running')) { return; }
+            var updateType = updatesRun.getAttribute('data-update-type') || '';
+            var mode = updatesRun.getAttribute('data-mode') || 'all';
+            var barSiteId = parseInt(updatesRun.getAttribute('data-site-id'), 10) || 0;
+            var updatesScope;
+            if (barSiteId) {
+                // Site Updates subpage: the tabs switch client-side (no reload), so the type
+                // resolves from the ACTIVE tab at click time (same source as initSiteUpdatesBar).
+                // Unresolvable tabs (abandoned, db updates) degrade to a no-op alert, never a
+                // wrong-type run.
+                var tabName = activeSiteTabName();
+                updateType = SITE_TAB_TYPES[tabName] || '';
+                if (!updateType) { window.alert(t('noSelection')); return; }
+                if ('selected' === mode) {
+                    var activeTab = document.querySelector('.ui.tab.active[data-tab="' + tabName + '"]');
+                    var siteSel = readUpdatesSelection(updatesRun, updateType, activeTab);
+                    if (!Object.keys(siteSel).length) { window.alert(t('noSelection')); return; }
+                    updatesScope = { update_type: updateType, mode: 'selected', selection: siteSel };
+                } else {
+                    // NEVER send mode:'all' from the site context: the server would derive the
+                    // site set from ALL managed sites. An empty slug list under this site's key
+                    // means "every pending item of the type, on this site only".
+                    var allSel = {};
+                    allSel[barSiteId] = [];
+                    updatesScope = { update_type: updateType, mode: 'selected', selection: allSel };
+                }
+            } else {
+                updatesScope = { update_type: updateType, mode: mode, selection: null };
+                if ('selected' === mode) {
+                    updatesScope.selection = readUpdatesSelection(updatesRun.closest('.wcd-updates-bar'), updateType);
+                    if (!Object.keys(updatesScope.selection).length) { window.alert(t('noSelection')); return; }
+                }
+            }
+            runPreflight(updatesRun, 'bulk', 0, updatesScope);
         }
     });
 })();

@@ -58,6 +58,12 @@ defined( 'ABSPATH' ) || exit;
 				<small class="wcd-muted"><?php esc_html_e( 'Differences below this percentage are not flagged.', 'webchangedetector-for-mainwp' ); ?></small>
 			</div>
 
+			<div class="field">
+				<label for="wcd-set-alert-emails"><?php esc_html_e( 'Alert emails', 'webchangedetector-for-mainwp' ); ?></label>
+				<input type="text" id="wcd-set-alert-emails" name="alert_emails" autocomplete="off" />
+				<small class="wcd-muted"><?php esc_html_e( 'WebChange Detector sends an alert email to these addresses when an On-Demand Check detects a change. Comma separated; leave empty to disable.', 'webchangedetector-for-mainwp' ); ?></small>
+			</div>
+
 			<div class="ui accordion wcd-settings-advanced">
 				<div class="title">
 					<i class="dropdown icon"></i>
@@ -73,14 +79,11 @@ defined( 'ABSPATH' ) || exit;
 					<div class="field">
 						<label for="wcd-set-auth-pass"><?php esc_html_e( 'Basic Auth password', 'webchangedetector-for-mainwp' ); ?></label>
 						<input type="password" id="wcd-set-auth-pass" name="basic_auth_password" autocomplete="new-password" />
-						<small class="wcd-muted wcd-auth-pass-hint" data-role="passwordset" hidden><?php esc_html_e( 'A password is stored. Leave blank to keep it, type a new one to replace it.', 'webchangedetector-for-mainwp' ); ?></small>
-						<div class="ui checkbox wcd-auth-pass-remove" data-role="passwordremove" hidden>
-							<input type="checkbox" id="wcd-set-auth-pass-clear" name="basic_auth_password_clear" />
-							<label for="wcd-set-auth-pass-clear"><?php esc_html_e( 'Remove password', 'webchangedetector-for-mainwp' ); ?></label>
-						</div>
+						<small class="wcd-muted wcd-auth-pass-hint" data-role="passwordset" hidden><?php esc_html_e( 'A password is stored. Clear this field to remove it, or type a new one to replace it.', 'webchangedetector-for-mainwp' ); ?></small>
 					</div>
 
 					<div class="field">
+						<label><?php esc_html_e( 'Static IP proxy', 'webchangedetector-for-mainwp' ); ?></label>
 						<div class="ui toggle checkbox">
 							<input type="checkbox" id="wcd-set-proxy" name="proxy_on" />
 							<label for="wcd-set-proxy"><?php esc_html_e( 'Use static IP proxy', 'webchangedetector-for-mainwp' ); ?></label>
@@ -107,9 +110,13 @@ defined( 'ABSPATH' ) || exit;
 					</div>
 				</div>
 			</div>
-
-			<p class="wcd-error" data-role="error" hidden></p>
 		</form>
+
+		<?php
+		// Outside the form on purpose: when the get_site_settings load fails the form stays
+		// hidden (nothing was filled in), and the error message must still be readable.
+		?>
+		<p class="wcd-error" data-role="error" hidden></p>
 	</div>
 	<div class="actions">
 		<button type="button" class="ui button wcd-settings-cancel"><?php esc_html_e( 'Cancel', 'webchangedetector-for-mainwp' ); ?></button>

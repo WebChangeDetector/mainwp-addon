@@ -12,7 +12,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders the MainWP Safe Update widget (dashboard metabox + Visual Checks "Run" tab panel).
+ * Renders the MainWP "WebChange Detector: Updates" widget (dashboard metabox + Visual Checks "Run" tab panel).
  */
 class WCD_MainWP_Widget {
 
@@ -34,6 +34,13 @@ class WCD_MainWP_Widget {
 		// No API token yet: show the setup hint (reuses the dashboard no-token template).
 		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
 			include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner-no-token.php';
+			return;
+		}
+
+		// Signup activation pending: the metabox cannot be unregistered per-state, so its body shows
+		// ONLY the activate-account hint (no stats, no Run CTA).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			self::render_pending_activation_notice();
 			return;
 		}
 
@@ -60,7 +67,7 @@ class WCD_MainWP_Widget {
 	}
 
 	/**
-	 * Render the widget heading band (Safe Updates title + sub header).
+	 * Render the widget heading band ("WCD Updates" title + sub header).
 	 *
 	 * Shared by the activated widget body (templates/widget-safe-update.php) and the not-activated
 	 * notice below, so the WCD branding/wording stays in one place. The activated body also needs the
@@ -73,7 +80,7 @@ class WCD_MainWP_Widget {
 		?>
 		<div class="mainwp-widget-header wcd-widget-header">
 			<h2 class="ui header handle-drag">
-				<?php esc_html_e( 'Safe Updates with WebChange Detector', 'webchangedetector-for-mainwp' ); ?>
+				<?php esc_html_e( 'WCD Updates', 'webchangedetector-for-mainwp' ); ?>
 				<div class="sub header"><?php esc_html_e( 'Capture before/after screenshots around your updates, then compare.', 'webchangedetector-for-mainwp' ); ?></div>
 			</h2>
 			<?php if ( $with_reopen_slot ) : ?>
@@ -100,7 +107,7 @@ class WCD_MainWP_Widget {
 		$settings_url = WCD_MainWP_Bootstrap::tab_url( 'settings' );
 		$message      = $site_id > 0
 			/* translators: %s: Visual Checks Settings tab URL. */
-			? __( 'This site is not activated for visual checks yet. Activate it in <a href="%s">Settings</a> to use it in Safe Updates.', 'webchangedetector-for-mainwp' )
+			? __( 'This site is not activated for visual checks yet. Activate it in <a href="%s">Settings</a> to use it in WCD Updates.', 'webchangedetector-for-mainwp' )
 			/* translators: %s: Visual Checks Settings tab URL. */
 			: __( 'No websites activated yet. Activate a website in <a href="%s">Settings</a> to run visual checks.', 'webchangedetector-for-mainwp' );
 
@@ -109,6 +116,34 @@ class WCD_MainWP_Widget {
 		<div class="wcd-empty-state">
 			<div class="ui info message"><p>
 				<?php printf( wp_kses_post( $message ), esc_url( $settings_url ) ); ?>
+			</p></div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the "activate your account first" notice: the widget-body state while a signup
+	 * activation is pending. Shows ONLY the hint (no stats, no Run CTA); the Account tab hosts the
+	 * full activate-account panel.
+	 *
+	 * @return void
+	 */
+	protected static function render_pending_activation_notice(): void {
+		$account_url   = WCD_MainWP_Bootstrap::tab_url( 'account' );
+		$pending_email = WCD_MainWP_Site_Settings::pending_email();
+
+		self::render_widget_heading();
+		?>
+		<div class="wcd-empty-state">
+			<div class="ui info message"><p>
+				<?php
+				printf(
+					/* translators: 1: the signup email address, 2: Account tab URL. */
+					wp_kses_post( __( 'Activate your WebChange Detector account first: we sent an activation link to %1$s. Click it, then reload this page. Details on the <a href="%2$s">Account</a> tab.', 'webchangedetector-for-mainwp' ) ),
+					'<strong>' . esc_html( $pending_email ) . '</strong>',
+					esc_url( $account_url )
+				);
+				?>
 			</p></div>
 		</div>
 		<?php
@@ -143,6 +178,13 @@ class WCD_MainWP_Widget {
 				?>
 			</p></div>
 			<?php
+			return;
+		}
+
+		// Signup activation pending: only the activate-account hint (defensive; the extension page
+		// shell already forces the Account tab while pending, so this render is normally unreachable).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			self::render_pending_activation_notice();
 			return;
 		}
 

@@ -11,7 +11,8 @@ phpcs.xml.dist
 vendor
 README.md
 node_modules
-scripts
 .DS_Store
 .github
 .claude
+build
+*.zip

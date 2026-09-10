@@ -2,8 +2,8 @@
 Contributors: Mike.Miler
 Tags: mainwp, visual regression testing, screenshots, updates, monitoring
 Requires at least: 6.0
-Tested up to: 7.0
-Stable tag: 1.0.2
+Tested up to: 7.1
+Stable tag: 1.1.1
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -31,21 +31,21 @@ An on-demand check is a visual diff you run around a change you make yourself, l
 
 = Features =
 
-* One-click safe updates: pre-update screenshots, updates, post-update screenshots, comparison: all in one run across all child sites.
+* One-click WCD Updates: pre-update screenshots, updates, post-update screenshots, comparison: all in one run across all child sites.
+* Start a run where you already work: "Update Selected with Checks" and "Update All with Checks" on MainWP's own Updates page (WordPress, Plugins, Themes and Translations) with MainWP's row selection, on each child site's Updates subpage, from the WCD Updates widget on your Operations dashboard and every site overview, or for the whole fleet from the Run tab.
 * Automatic cache clearing: the child site's cache is cleared before the pre-update screenshots and after the updates, so screenshots never show a stale cached page. Works with 20+ caching plugins (WP Rocket, LiteSpeed Cache, W3 Total Cache, WP Super Cache and more) through the MainWP Child plugin, with nothing extra to install.
-* Bulk or single site: run the flow for every enabled child site at once or for one site from its overview.
 * Page selection per site: choose which URLs are checked, separately for desktop and mobile.
+* Check settings per site: screenshot region, difference threshold, alert emails, which devices new URLs are activated for, Basic Auth, static IP proxy, screenshot delay, and CSS or JS injection.
 * Checks overview: all runs across your sites with filters, change percentages and side-by-side comparisons.
-* Safe Update widget: start a run from a draggable, hideable widget on your Operations dashboard or a single child site's overview.
 * Live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress, and automatic resume if you navigate away mid-run.
-* Account overview: your plan, remaining checks and renewal date on the Account tab.
+* Your account in the dashboard: sign up on the Account tab or connect an existing account with your API token, and see your plan, remaining checks and active sites.
 * Auto-enable new sites: optionally provision every newly added MainWP child site for visual checks automatically.
 
 = External service: WebChange Detector =
 
 This plugin relies on the WebChange Detector service ([https://www.webchangedetector.com](https://www.webchangedetector.com)) as a third-party service to capture, store and compare the screenshots. A WebChange Detector account is required (free plan available).
 
-The plugin sends data to `api.webchangedetector.com` only after you have entered your API token, and only in these circumstances: when you connect or verify your account, when you enable a child site or sync its page URLs (the public URLs and page titles of that site are transmitted), when you start a visual check (screenshots are taken of the selected public URLs), and when you review or update results. Your API token is sent with each request to authenticate your account. No data about your WordPress users or any non-selected content is transmitted.
+The plugin sends data to `api.webchangedetector.com` only after you have entered your API token or submitted the account signup form, and only in these circumstances: when you create your free trial account from the Account tab (your first and last name, email address, a hashed version of your chosen password (never the plain text password), your dashboard site's domain and server IP address are transmitted to create the account), when you connect or verify your account, when you enable a child site or sync its page URLs (the public URLs and page titles of that site are transmitted), when you start a visual check (screenshots are taken of the selected public URLs), and when you review or update results. Your API token is sent with each request to authenticate your account. No data about your WordPress users or any non-selected content is transmitted.
 
 * Service: [https://www.webchangedetector.com](https://www.webchangedetector.com)
 * Terms of use: [https://www.webchangedetector.com/terms-of-use/](https://www.webchangedetector.com/terms-of-use/)
@@ -99,20 +99,30 @@ No, the plugin does that for you. It clears each child site's cache before the p
 
 = Does this work with MainWP updates started elsewhere (e.g. scheduled)? =
 
-Updates you start outside the plugin's own flow still trigger post-update screenshots as a safety net, so you can compare against the last baseline. For the full pre/post comparison, start the run from the "Run visual checks & updates" button.
+No. Only updates you start with one of the plugin's own "with Checks" buttons are checked. Updates started with MainWP's own update buttons, and scheduled or automatic updates, run without any screenshots or comparisons, so they never use check credits.
 
 == Screenshots ==
 
-1. The Safe Update widget on your MainWP Operations dashboard: how many sites have updates, how many pages and checks the next run will cover, and one button to start it.
+1. The WCD Updates widget on your MainWP Operations dashboard: how many sites have updates, how many pages and checks the next run will cover, and one button to start it.
 2. Pre-flight summary before the run: sites, pages, checks and credit coverage, plus the exact updates that will be installed, per site.
 3. The live run popup: a Pre-update, Updates, Post-update and Done timeline with per-site progress. When it finishes you see "All good" or the number of pages to review, with Re-check and View results.
 4. Side-by-side before/after comparison with the AI change analysis: real changes flagged, dynamic content auto-ignored, with the visual difference percentage and a browser-console check.
-5. The Run tab on the WebChange Detector extension page: start a safe-update run across all your enabled sites.
+5. The Run tab on the WebChange Detector extension page: start a WCD Updates run across all your enabled sites.
 6. The Checks tab: every run across your sites with filters for date, status, website and detection, plus an AI summary per run.
 7. The Settings tab: activate a website and choose which URLs are checked, separately for desktop and mobile. One click activates checks for all your managed websites.
 8. The Account tab: your plan, remaining checks and active sites, the API token, auto-enable for new sites, and the reset-connection option.
 
 == Changelog ==
+
+= 1.1.1 =
+* New: Sign up for a WebChange Detector account right on the Account tab.
+* New: "Update Selected with Checks" and "Update All with Checks" on MainWP's own Updates page.
+* New: The same two buttons on each child site's Updates subpage.
+* New: A "WCD Updates" card with an "Update with Checks" button inside MainWP's Updates Overview widget.
+* New: Per-site check settings: screenshot region, threshold, alert emails, Basic Auth, proxy, delay, CSS and JS.
+* Improvement: On MainWP's Updates page, selected sites without visual checks are updated too, badged in the pre-run overview, and use no checks.
+* Improvement: The safe-update flow is now called "WCD Updates".
+* Fix: Updates started outside WebChange Detector no longer produce screenshots. They used to trigger a post-update screenshot compared against an outdated baseline, using up checks for nothing.
 
 = 1.0.2 =
 * New: One unified extension page with Run, Checks, Settings and Account tabs. 
@@ -133,6 +143,9 @@ Updates you start outside the plugin's own flow still trigger post-update screen
 * Initial release: safe-update flow (pre/post screenshots around MainWP updates), Visual Checks overview, dashboard widget, per-site URL selection, auto-enable for new sites, automatic cache clearing on child sites before pre-update screenshots and after updates.
 
 == Upgrade Notice ==
+
+= 1.1.1 =
+Update with visual checks straight from MainWP's Updates page and Updates Overview widget, sign up without leaving the dashboard, and configure checks per site. Note: updates started outside WebChange Detector no longer produce screenshots.
 
 = 1.0.2 =
 A redesigned dashboard: one extension page with Run, Checks, Settings and Account tabs, a Safe Update widget, a live run popup, and automatic resume of interrupted runs so no checks are wasted.

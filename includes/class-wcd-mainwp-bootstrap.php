@@ -40,6 +40,13 @@ class WCD_MainWP_Bootstrap {
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-widget.php';
 		require_once WCD_MAINWP_PLUGIN_PATH . 'includes/class-wcd-mainwp-runs-view.php';
 
+		// Front-end responder for the trial-signup domain verification: during the signup POST the
+		// API GETs http://{domain}/?wcd-verify=... and expects the one-shot secret back. Deliberately
+		// wired here, NOT behind the MAINWP_VERSION gate in setup(): the GET hits the public front
+		// end, and it must keep answering even if MainWP failed to load. WP-core hook only, no
+		// MainWP internals; the method self-disarms (no secret stored or a token exists = no-op).
+		add_action( 'init', array( WCD_MainWP_Site_Settings::class, 'maybe_answer_verify' ) );
+
 		add_action( 'plugins_loaded', array( self::class, 'setup' ) );
 	}
 
@@ -61,19 +68,37 @@ class WCD_MainWP_Bootstrap {
 		// render_admin_page()); Site_Settings still registers the per-site tab on the Sites pages.
 		WCD_MainWP_Site_Settings::init();
 		WCD_MainWP_Url_Sync::init();
-		WCD_MainWP_Update_Flow::init();
 		WCD_MainWP_Ajax::init();
 
 		add_action( 'admin_enqueue_scripts', array( self::class, 'enqueue_assets' ) );
 
 		// The safe-update entry point on the Operations dashboard and individual child-site overview
-		// is the draggable "Safe Update" metabox widget (register_widget()); MainWP renders our
-		// metaboxes on both surfaces. The hero banner stays only on the native Updates page below.
+		// is the draggable "WebChange Detector: Updates" metabox widget (register_widget()); MainWP
+		// renders our metaboxes on both surfaces.
 
-		// Updates-page entry point: the hero banner above the native Updates page's plugin list,
-		// shown only when plugin updates are available (the hook passes the total count). The Updates
-		// page is not a widget grid, so a banner is the closest fit there.
-		add_action( 'mainwp_updates_before_plugin_updates', array( self::class, 'render_updates_plugin_banner' ), 10, 2 );
+		// Updates-page entry point: a compact selection-aware bar above each update tab's native
+		// table (WordPress, Plugins, Themes, Translations). One renderer for all four documented
+		// per-tab hooks; the update type is derived from the firing hook. Exactly one tab renders
+		// per pageload, so at most one bar exists on the global Updates page.
+		$wcd_updates_hooks = array(
+			'mainwp_updates_before_wp_updates',
+			'mainwp_updates_before_plugin_updates',
+			'mainwp_updates_before_theme_updates',
+			'mainwp_updates_before_translation_updates',
+		);
+		foreach ( $wcd_updates_hooks as $wcd_updates_hook ) {
+			add_action( $wcd_updates_hook, array( self::class, 'render_updates_bar' ), 10, 2 );
+		}
+
+		// Native "Updates Overview" widget (Operations dashboard AND individual child-site
+		// overview): a compact WCD Updates card after MainWP's per-type cards.
+		add_action( 'mainwp_updates_overview_after_update_details', array( self::class, 'render_overview_card' ), 10, 2 );
+
+		// Individual site's Updates subpage (admin.php?page=managesites&updateid=N): the
+		// selection bar inside the native actions bar. The SAME hook also fires on the global
+		// Updates page (where the four per-tab hooks above already render the bar) and the tab
+		// slugs collide between the two pages, so the renderer gates on the admin page slug.
+		add_action( 'mainwp_widget_updates_actions_top', array( self::class, 'render_site_updates_bar' ) );
 	}
 
 	/* ─────────────────────────── MainWP registration ───────────────────── */
@@ -114,7 +139,7 @@ class WCD_MainWP_Bootstrap {
 			'id'            => 'wcd-safe-update-widget',
 			'plugin'        => WCD_MAINWP_PLUGIN_FILE,
 			'key'           => 'wcd_safe_update_widget',
-			'metabox_title' => 'WebChange Detector: Safe Update',
+			'metabox_title' => __( 'WebChange Detector: Updates', 'webchangedetector-for-mainwp' ),
 			'callback'      => array( 'WCD_MainWP_Widget', 'render_safe_update_metabox' ),
 			'layout'        => array( 0, 20, 12, 10 ),
 		);
@@ -135,7 +160,7 @@ class WCD_MainWP_Bootstrap {
 	public static function register_widget_screen_options( $widgets ): array {
 		$widgets = is_array( $widgets ) ? $widgets : array();
 
-		$widgets['advanced-wcd-safe-update-widget'] = esc_html__( 'WebChange Detector: Safe Update', 'webchangedetector-for-mainwp' );
+		$widgets['advanced-wcd-safe-update-widget'] = esc_html__( 'WebChange Detector: Updates', 'webchangedetector-for-mainwp' );
 
 		return $widgets;
 	}
@@ -181,39 +206,136 @@ class WCD_MainWP_Bootstrap {
 		$settings_url = self::tab_url( 'account' );
 
 		return sprintf(
-			/* translators: 1: webchangedetector.com account link, 2: settings page link. */
-			esc_html__( 'Create an account at %1$s if you do not have one yet, then enter your API token in %2$s to enable visual checks.', 'webchangedetector-for-mainwp' ),
-			'<a href="https://www.webchangedetector.com" target="_blank" rel="noopener">webchangedetector.com</a>',
-			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'the settings', 'webchangedetector-for-mainwp' ) . '</a>'
+			/* translators: %s: Account tab link. */
+			esc_html__( 'Create your WebChange Detector account or connect an existing one in the %s. You start with a free trial, no credit card required.', 'webchangedetector-for-mainwp' ),
+			'<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Account tab', 'webchangedetector-for-mainwp' ) . '</a>'
 		);
 	}
 
 	/* ───────────────────────────── Entry point ─────────────────────────── */
 
 	/**
-	 * Render the hero banner above the native Updates page's plugin list. Only shown when the
-	 * plugin updates tab actually has updates (the hook passes the total). Scope is detected by
-	 * resolve_banner_scope() (current site id => single site, else bulk).
+	 * Render the compact safe-update bar above one of the native Updates page's per-type tables.
+	 * Bound to all four per-tab hooks; the update type comes from the firing hook. Only rendered
+	 * when a token is configured (silent no-op otherwise) and the tab has pending updates (the
+	 * hook passes the total).
 	 *
-	 * @param mixed $websites             Child sites in the updates view (unused).
-	 * @param int   $total_plugin_upgrades  Number of available plugin updates in scope.
+	 * @param mixed $websites Child sites in the updates view (unused; hook signature).
+	 * @param int   $total    Number of available updates of this type in scope.
 	 */
-	public static function render_updates_plugin_banner( $websites = null, $total_plugin_upgrades = 0 ): void {
-		if ( (int) $total_plugin_upgrades > 0 ) {
-			// The hook already told us updates exist on this page, so keep the CTA enabled even if our
-			// own (WCD-enabled-sites-only) pending count disagrees with MainWP's network-wide total.
-			self::render_scoped_banner( true );
+	public static function render_updates_bar( $websites = null, $total = 0 ): void {
+		unset( $websites );
+		// is_ready(): silent no-op without a token AND while a signup activation is pending
+		// (nothing actionable may appear anywhere until the account is activated).
+		if ( ! WCD_MainWP_Site_Settings::is_ready() || (int) $total < 1 ) {
+			return;
 		}
+
+		$wcd_mainwp_hook_types  = array(
+			'mainwp_updates_before_wp_updates'          => 'core',
+			'mainwp_updates_before_plugin_updates'      => 'plugins',
+			'mainwp_updates_before_theme_updates'       => 'themes',
+			'mainwp_updates_before_translation_updates' => 'translations',
+		);
+		$wcd_mainwp_update_type = $wcd_mainwp_hook_types[ current_action() ] ?? '';
+		if ( '' === $wcd_mainwp_update_type ) {
+			return;
+		}
+
+		include WCD_MAINWP_PLUGIN_PATH . 'templates/updates-bar.php';
+	}
+
+	/**
+	 * Render the compact "WCD Updates" card inside MainWP's native Updates Overview widget.
+	 *
+	 * The hook fires inside the widget's cards grid on the Operations dashboard (global view)
+	 * and on an individual child-site overview (site view, $current_site set). Site view renders
+	 * only when that site is enabled for visual checks; global view when any site is enabled.
+	 *
+	 * @param mixed $current_site MainWP website object in site view, null in global view.
+	 * @param bool  $global_view  Whether the widget renders the global (all sites) view.
+	 */
+	public static function render_overview_card( $current_site = null, $global_view = true ): void {
+		// is_ready(): silent no-op without a token AND while a signup activation is pending.
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			return;
+		}
+
+		$wcd_mainwp_site_id = ( ! $global_view && is_object( $current_site ) && isset( $current_site->id ) ) ? (int) $current_site->id : 0;
+		if ( $wcd_mainwp_site_id > 0 ) {
+			if ( ! WCD_MainWP_Site_Map::is_enabled( $wcd_mainwp_site_id ) ) {
+				return;
+			}
+			$wcd_mainwp_scope = 'site';
+		} else {
+			$wcd_mainwp_enabled = array_filter(
+				WCD_MainWP_Site_Map::all(),
+				static function ( $entry ) {
+					return ! empty( $entry['enabled'] );
+				}
+			);
+			if ( empty( $wcd_mainwp_enabled ) ) {
+				return;
+			}
+			$wcd_mainwp_scope = 'bulk';
+		}
+
+		include WCD_MAINWP_PLUGIN_PATH . 'templates/widget-overview-card.php';
+	}
+
+	/**
+	 * Render the selection bar on an individual site's Updates subpage
+	 * (admin.php?page=managesites&updateid=N), inside the native actions bar's middle column.
+	 *
+	 * The `mainwp_widget_updates_actions_top` hook also fires on the global Updates page, where
+	 * the per-tab bar already renders, and the $active_tab slugs collide between the two pages
+	 * (e.g. the abandoned tabs), so the gate is the resolved admin page slug, never the hook
+	 * argument. The subpage switches its update-type tabs client-side without a reload, so the
+	 * buttons carry an empty data-update-type and the JS resolves the type at click time.
+	 *
+	 * @param mixed $active_tab The native page's active tab slug (unused; page-gated instead).
+	 */
+	public static function render_site_updates_bar( $active_tab = '' ): void {
+		unset( $active_tab );
+		// is_ready(): silent no-op without a token AND while a signup activation is pending.
+		if ( ! WCD_MainWP_Site_Settings::is_ready() ) {
+			return;
+		}
+
+		// Same page-slug source as on_our_page(): resolved by core before rendering.
+		$page = isset( $GLOBALS['plugin_page'] ) ? (string) $GLOBALS['plugin_page'] : '';
+		if ( 'managesites' !== $page ) {
+			return;
+		}
+
+		// The subpage sets the current wpid before rendering (set_current_wpid), same guarded
+		// read as resolve_banner_scope().
+		$util    = '\\MainWP\\Dashboard\\MainWP_System_Utility';
+		$site_id = ( class_exists( $util ) && method_exists( $util, 'get_current_wpid' ) ) ? (int) $util::get_current_wpid() : 0;
+		if ( $site_id < 1 || ! isset( WCD_MainWP_Site_Map::managed_sites()[ $site_id ] ) ) {
+			return;
+		}
+
+		// Skip when the site has no pending updates (mirrors the global bar's total gate); an
+		// unknown count (MainWP DB layer unavailable) fails open and renders the bar.
+		$wcd_mainwp_by_site = WCD_MainWP_Update_Flow::pending_updates_by_site( array( $site_id ) );
+		if ( is_array( $wcd_mainwp_by_site ) && ( $wcd_mainwp_by_site[ $site_id ] ?? 0 ) < 1 ) {
+			return;
+		}
+
+		$wcd_mainwp_update_type = '';
+		$wcd_mainwp_site_id     = $site_id;
+		$wcd_mainwp_inline      = true;
+		include WCD_MAINWP_PLUGIN_PATH . 'templates/updates-bar.php';
 	}
 
 	/**
 	 * Resolve the entry-point scope (single enabled site vs. bulk over all enabled sites) and the
-	 * pending-update aggregates. Shared by the Updates-page banner (render_scoped_banner) and the
-	 * dashboard "Safe Update" widget (WCD_MainWP_Widget::render_safe_update_metabox). Assumes a token
-	 * is configured (callers check first).
+	 * pending-update aggregates for the dashboard "WebChange Detector: Updates" widget and the Run tab
+	 * (WCD_MainWP_Widget). Assumes a token is configured (callers check first).
 	 *
 	 * @param bool $force_enabled Force the CTA enabled even when the pending count is 0 (caller knows
-	 *                            updates exist, e.g. the Updates-page entry point).
+	 *                            updates exist).
 	 * @return array|null { scope, site_id, sites_count, updates_count, updates_sites_count,
 	 *                      force_enabled } or null when nothing should render (no enabled sites, or a
 	 *                      single site that is not enabled for WCD).
@@ -260,39 +382,6 @@ class WCD_MainWP_Bootstrap {
 		);
 	}
 
-	/**
-	 * Detect scope and render the hero banner. Used by the Updates-page entry point. No-ops without a
-	 * token or enabled sites.
-	 *
-	 * @param bool $updates_known_present Force the CTA enabled (caller already knows updates exist).
-	 * @param bool $allow_no_token_hint   When no token is set, render the setup hint instead of nothing.
-	 *                                    The Updates-page entry point keeps the silent no-op (its banner
-	 *                                    is already conditional).
-	 */
-	protected static function render_scoped_banner( bool $updates_known_present = false, bool $allow_no_token_hint = false ): void {
-		// No API token yet: nothing to run. Offer the setup hint on surfaces that asked for it.
-		if ( '' === WCD_MainWP_Site_Settings::get_global() ) {
-			if ( $allow_no_token_hint ) {
-				include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner-no-token.php';
-			}
-			return;
-		}
-
-		$wcd_scope = self::resolve_banner_scope( $updates_known_present );
-		if ( null === $wcd_scope ) {
-			return;
-		}
-
-		$scope               = $wcd_scope['scope'];
-		$site_id             = $wcd_scope['site_id'];
-		$sites_count         = $wcd_scope['sites_count'];
-		$updates_count       = $wcd_scope['updates_count'];
-		$updates_sites_count = $wcd_scope['updates_sites_count'];
-
-		$force_enabled = $updates_known_present;
-		include WCD_MAINWP_PLUGIN_PATH . 'templates/entry-banner.php';
-	}
-
 	/* ───────────────────────────────── Assets ──────────────────────────── */
 
 	/**
@@ -336,6 +425,17 @@ class WCD_MainWP_Bootstrap {
 	}
 
 	/**
+	 * Public wrapper around on_our_page() so callers outside the class (the
+	 * beta-channel admin notice in the main plugin file) can reuse the same
+	 * screen gating instead of duplicating the $GLOBALS['plugin_page'] logic.
+	 *
+	 * @return bool True when the current admin request is one of the add-on's pages.
+	 */
+	public static function is_on_our_page(): bool {
+		return self::on_our_page();
+	}
+
+	/**
 	 * Whether the current admin request is one of the add-on's pages.
 	 *
 	 * @return bool True when our CSS/JS should load on this page.
@@ -364,106 +464,109 @@ class WCD_MainWP_Bootstrap {
 	 */
 	protected static function js_strings(): array {
 		return array(
-			'cancel'            => __( 'Cancel', 'webchangedetector-for-mainwp' ),
-			'resetConfirm'      => __( 'Reset the WebChange Detector connection? This disconnects all sites and you will have to enable them again. Your data on WebChange Detector is not deleted.', 'webchangedetector-for-mainwp' ),
-			'preflightTitle'    => __( 'Pre-update visual check', 'webchangedetector-for-mainwp' ),
-			'preflightLead'     => __( 'WebChange Detector captures every selected page before the updates, installs all updates, then re-captures and compares.', 'webchangedetector-for-mainwp' ),
-			'confirmRun'        => __( 'Capture & update', 'webchangedetector-for-mainwp' ),
-			'enoughCredits'     => __( 'Enough credits', 'webchangedetector-for-mainwp' ),
-			'upgradePlan'       => __( 'Upgrade plan', 'webchangedetector-for-mainwp' ),
+			'cancel'             => __( 'Cancel', 'webchangedetector-for-mainwp' ),
+			'resetConfirm'       => __( 'Reset the WebChange Detector connection? This disconnects all sites and you will have to enable them again. Your data on WebChange Detector is not deleted.', 'webchangedetector-for-mainwp' ),
+			'preflightTitle'     => __( 'Pre-update visual check', 'webchangedetector-for-mainwp' ),
+			'preflightLead'      => __( 'WebChange Detector captures every selected page before the updates, installs all updates, then re-captures and compares.', 'webchangedetector-for-mainwp' ),
+			'confirmRun'         => __( 'Capture & update', 'webchangedetector-for-mainwp' ),
+			'enoughCredits'      => __( 'Enough credits', 'webchangedetector-for-mainwp' ),
+			'upgradePlan'        => __( 'Upgrade plan', 'webchangedetector-for-mainwp' ),
 			// Preflight summary strip + sections.
-			'sites'             => __( 'Sites', 'webchangedetector-for-mainwp' ),
-			'pages'             => __( 'Pages', 'webchangedetector-for-mainwp' ),
-			'checks'            => __( 'Checks', 'webchangedetector-for-mainwp' ),
-			'desktop'           => __( 'Desktop', 'webchangedetector-for-mainwp' ),
-			'mobile'            => __( 'Mobile', 'webchangedetector-for-mainwp' ),
-			'page'              => __( 'page', 'webchangedetector-for-mainwp' ),
-			'pagesPlural'       => __( 'pages', 'webchangedetector-for-mainwp' ),
-			'site'              => __( 'site', 'webchangedetector-for-mainwp' ),
-			'sitesPlural'       => __( 'sites', 'webchangedetector-for-mainwp' ),
+			'sites'              => __( 'Sites', 'webchangedetector-for-mainwp' ),
+			'pages'              => __( 'Pages', 'webchangedetector-for-mainwp' ),
+			'checks'             => __( 'Checks', 'webchangedetector-for-mainwp' ),
+			'desktop'            => __( 'Desktop', 'webchangedetector-for-mainwp' ),
+			'mobile'             => __( 'Mobile', 'webchangedetector-for-mainwp' ),
+			'page'               => __( 'page', 'webchangedetector-for-mainwp' ),
+			'pagesPlural'        => __( 'pages', 'webchangedetector-for-mainwp' ),
+			'site'               => __( 'site', 'webchangedetector-for-mainwp' ),
+			'sitesPlural'        => __( 'sites', 'webchangedetector-for-mainwp' ),
 			/* translators: %1$d used checks, %2$d available, %3$d total. */
-			'creditUsage'       => __( 'This run uses %1$d checks · %2$d of %3$d available', 'webchangedetector-for-mainwp' ),
+			'creditUsage'        => __( 'This run uses %1$d checks · %2$d of %3$d available', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of checks the plan is short by. */
-			'creditShort'       => __( '%d short', 'webchangedetector-for-mainwp' ),
-			'updatesToInstall'  => __( 'updates will be installed (core, plugins & themes)', 'webchangedetector-for-mainwp' ),
-			'noUpdatesBadge'    => __( 'No updates', 'webchangedetector-for-mainwp' ),
-			'noEligibleUpdates' => __( 'No pending updates on the sites enabled for visual checks.', 'webchangedetector-for-mainwp' ),
-			'liveNote'          => __( 'Sites stay live; only screenshots are taken.', 'webchangedetector-for-mainwp' ),
-			'runningTitle'      => __( 'Safe update', 'webchangedetector-for-mainwp' ),
-			'running'           => __( 'Running', 'webchangedetector-for-mainwp' ),
-			'dontClose'         => __( "don't close this tab", 'webchangedetector-for-mainwp' ),
+			'creditShort'        => __( '%d short', 'webchangedetector-for-mainwp' ),
+			'updatesToInstall'   => __( 'updates will be installed (core, plugins & themes)', 'webchangedetector-for-mainwp' ),
+			'noUpdatesBadge'     => __( 'No updates', 'webchangedetector-for-mainwp' ),
+			'noEligibleUpdates'  => __( 'No pending updates on the sites enabled for visual checks.', 'webchangedetector-for-mainwp' ),
+			'liveNote'           => __( 'Sites stay live; only screenshots are taken.', 'webchangedetector-for-mainwp' ),
+			'runningTitle'       => __( 'WCD Updates', 'webchangedetector-for-mainwp' ),
+			'running'            => __( 'Running', 'webchangedetector-for-mainwp' ),
+			'dontClose'          => __( "don't close this tab", 'webchangedetector-for-mainwp' ),
 			// Timeline steps.
-			'phasePre'          => __( 'Pre', 'webchangedetector-for-mainwp' ),
-			'phaseUpdates'      => __( 'Updates', 'webchangedetector-for-mainwp' ),
-			'phasePost'         => __( 'Post', 'webchangedetector-for-mainwp' ),
-			'phaseDone'         => __( 'Done', 'webchangedetector-for-mainwp' ),
-			'phaseFailed'       => __( 'Failed', 'webchangedetector-for-mainwp' ),
-			'verbPre'           => __( 'Capturing pre-update screenshots', 'webchangedetector-for-mainwp' ),
-			'verbUpdate'        => __( 'Installing all updates', 'webchangedetector-for-mainwp' ),
-			'verbPost'          => __( 'Capturing post-update screenshots', 'webchangedetector-for-mainwp' ),
-			'verbDone'          => __( 'Creating change detections', 'webchangedetector-for-mainwp' ),
+			'phasePre'           => __( 'Pre', 'webchangedetector-for-mainwp' ),
+			'phaseUpdates'       => __( 'Updates', 'webchangedetector-for-mainwp' ),
+			'phasePost'          => __( 'Post', 'webchangedetector-for-mainwp' ),
+			'phaseDone'          => __( 'Done', 'webchangedetector-for-mainwp' ),
+			'phaseFailed'        => __( 'Failed', 'webchangedetector-for-mainwp' ),
+			'verbPre'            => __( 'Capturing pre-update screenshots', 'webchangedetector-for-mainwp' ),
+			'verbUpdate'         => __( 'Installing all updates', 'webchangedetector-for-mainwp' ),
+			'verbPost'           => __( 'Capturing post-update screenshots', 'webchangedetector-for-mainwp' ),
+			'verbDone'           => __( 'Creating change detections', 'webchangedetector-for-mainwp' ),
 			// Run-card stat panels.
-			'panelPre'          => __( 'Pre-update screenshots', 'webchangedetector-for-mainwp' ),
-			'panelUpdates'      => __( 'Installing updates', 'webchangedetector-for-mainwp' ),
-			'panelPost'         => __( 'Post-update screenshots', 'webchangedetector-for-mainwp' ),
-			'queue'             => __( 'Queue', 'webchangedetector-for-mainwp' ),
-			'processing'        => __( 'Processing', 'webchangedetector-for-mainwp' ),
-			'doneCount'         => __( 'Done', 'webchangedetector-for-mainwp' ),
-			'failed'            => __( 'Failed', 'webchangedetector-for-mainwp' ),
-			'queued'            => __( 'Queued', 'webchangedetector-for-mainwp' ),
-			'capturing'         => __( 'Capturing…', 'webchangedetector-for-mainwp' ),
-			'captured'          => __( 'Captured', 'webchangedetector-for-mainwp' ),
-			'installing'        => __( 'Installing…', 'webchangedetector-for-mainwp' ),
-			'installed'         => __( 'Installed', 'webchangedetector-for-mainwp' ),
-			'updatesUnit'       => __( 'updates', 'webchangedetector-for-mainwp' ),
+			'panelPre'           => __( 'Pre-update screenshots', 'webchangedetector-for-mainwp' ),
+			'panelUpdates'       => __( 'Installing updates', 'webchangedetector-for-mainwp' ),
+			'panelPost'          => __( 'Post-update screenshots', 'webchangedetector-for-mainwp' ),
+			'queue'              => __( 'Queue', 'webchangedetector-for-mainwp' ),
+			'processing'         => __( 'Processing', 'webchangedetector-for-mainwp' ),
+			'doneCount'          => __( 'Done', 'webchangedetector-for-mainwp' ),
+			'failed'             => __( 'Failed', 'webchangedetector-for-mainwp' ),
+			'queued'             => __( 'Queued', 'webchangedetector-for-mainwp' ),
+			'capturing'          => __( 'Capturing…', 'webchangedetector-for-mainwp' ),
+			'captured'           => __( 'Captured', 'webchangedetector-for-mainwp' ),
+			'installing'         => __( 'Installing…', 'webchangedetector-for-mainwp' ),
+			'installed'          => __( 'Installed', 'webchangedetector-for-mainwp' ),
+			'updatesUnit'        => __( 'updates', 'webchangedetector-for-mainwp' ),
 			// Per-site row statuses.
-			'statusPre'         => __( 'Capturing pre', 'webchangedetector-for-mainwp' ),
-			'statusUpdating'    => __( 'Updating', 'webchangedetector-for-mainwp' ),
-			'statusPost'        => __( 'Capturing post', 'webchangedetector-for-mainwp' ),
-			'statusComparing'   => __( 'Comparing', 'webchangedetector-for-mainwp' ),
-			'clean'             => __( 'Clean', 'webchangedetector-for-mainwp' ),
+			'statusPre'          => __( 'Capturing pre', 'webchangedetector-for-mainwp' ),
+			'statusUpdating'     => __( 'Updating', 'webchangedetector-for-mainwp' ),
+			'statusPost'         => __( 'Capturing post', 'webchangedetector-for-mainwp' ),
+			'statusComparing'    => __( 'Comparing', 'webchangedetector-for-mainwp' ),
+			'clean'              => __( 'Clean', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review. */
-			'toReview'          => __( '%d to review', 'webchangedetector-for-mainwp' ),
+			'toReview'           => __( '%d to review', 'webchangedetector-for-mainwp' ),
 			// Result summary + actions.
-			'allGood'           => __( 'All good', 'webchangedetector-for-mainwp' ),
+			'allGood'            => __( 'All good', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review. */
-			'pagesToReview'     => __( '%d pages to review', 'webchangedetector-for-mainwp' ),
+			'pagesToReview'      => __( '%d pages to review', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of pages to review (singular). */
-			'pageToReview'      => __( '%d page to review', 'webchangedetector-for-mainwp' ),
-			'viewResults'       => __( 'View results', 'webchangedetector-for-mainwp' ),
-			'recheck'           => __( 'Re-check', 'webchangedetector-for-mainwp' ),
-			'runFooterNote'     => __( 'Sites stay live; only screenshots are taken. Keep this tab open until the run finishes.', 'webchangedetector-for-mainwp' ),
-			'stillRunning'      => __( 'Still running. Open in WebChange Detector.', 'webchangedetector-for-mainwp' ),
-			'noChecks'          => __( 'No URLs configured for this site.', 'webchangedetector-for-mainwp' ),
+			'pageToReview'       => __( '%d page to review', 'webchangedetector-for-mainwp' ),
+			'viewResults'        => __( 'View results', 'webchangedetector-for-mainwp' ),
+			'recheck'            => __( 'Re-check', 'webchangedetector-for-mainwp' ),
+			'runFooterNote'      => __( 'Sites stay live; only screenshots are taken. Keep this tab open until the run finishes.', 'webchangedetector-for-mainwp' ),
+			'stillRunning'       => __( 'Still running. Open in WebChange Detector.', 'webchangedetector-for-mainwp' ),
+			'noChecks'           => __( 'No URLs configured for this site.', 'webchangedetector-for-mainwp' ),
 			// URL panel: search, pagination, select-all.
-			'searchUrls'        => __( 'Search URLs…', 'webchangedetector-for-mainwp' ),
-			'selectAll'         => __( 'Select all:', 'webchangedetector-for-mainwp' ),
-			'prev'              => __( 'Prev', 'webchangedetector-for-mainwp' ),
-			'next'              => __( 'Next', 'webchangedetector-for-mainwp' ),
+			'searchUrls'         => __( 'Search URLs…', 'webchangedetector-for-mainwp' ),
+			'selectAll'          => __( 'Select all:', 'webchangedetector-for-mainwp' ),
+			'prev'               => __( 'Prev', 'webchangedetector-for-mainwp' ),
+			'next'               => __( 'Next', 'webchangedetector-for-mainwp' ),
 			/* translators: %s: total URL count. */
-			'urlsTotal'         => __( '%s URLs', 'webchangedetector-for-mainwp' ),
-			'noResults'         => __( 'No URLs match your search.', 'webchangedetector-for-mainwp' ),
+			'urlsTotal'          => __( '%s URLs', 'webchangedetector-for-mainwp' ),
+			'noResults'          => __( 'No URLs match your search.', 'webchangedetector-for-mainwp' ),
 			/* translators: %s: device name (Desktop or Mobile). */
-			'confirmDisableAll' => __( 'Disable all %s checks for this site?', 'webchangedetector-for-mainwp' ),
-			'noSites'           => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ),
-			'genericError'      => __( 'Something went wrong.', 'webchangedetector-for-mainwp' ),
-			'disabled'          => __( 'Inactive', 'webchangedetector-for-mainwp' ),
+			'confirmDisableAll'  => __( 'Disable all %s checks for this site?', 'webchangedetector-for-mainwp' ),
+			'noSites'            => __( 'No sites are enabled for visual checks.', 'webchangedetector-for-mainwp' ),
+			'genericError'       => __( 'Something went wrong.', 'webchangedetector-for-mainwp' ),
+			'disabled'           => __( 'Inactive', 'webchangedetector-for-mainwp' ),
 			// "Activate checks for all websites" on the Sites & pages settings tab.
 			/* translators: 1: current site number, 2: total sites. */
-			'bulkSyncProgress'  => __( 'Activating %1$d of %2$d websites…', 'webchangedetector-for-mainwp' ),
+			'bulkSyncProgress'   => __( 'Activating %1$d of %2$d websites…', 'webchangedetector-for-mainwp' ),
 			/* translators: 1: activated site count, 2: total sites. */
-			'bulkSyncDone'      => __( 'Activated %1$d of %2$d websites.', 'webchangedetector-for-mainwp' ),
+			'bulkSyncDone'       => __( 'Activated %1$d of %2$d websites.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of websites that failed to activate. */
-			'bulkSyncFailed'    => __( '%d failed.', 'webchangedetector-for-mainwp' ),
-			'bulkSyncConfirm'   => __( 'This activates visual checks for every managed website. Websites are unlimited on every plan; only the checks you run count against it. Continue?', 'webchangedetector-for-mainwp' ),
-			'ctaRunning'        => __( 'Visual check running…', 'webchangedetector-for-mainwp' ),
+			'bulkSyncFailed'     => __( '%d failed.', 'webchangedetector-for-mainwp' ),
+			'bulkSyncConfirm'    => __( 'This activates visual checks for every managed website. Websites are unlimited on every plan; only the checks you run count against it. Continue?', 'webchangedetector-for-mainwp' ),
+			'ctaRunning'         => __( 'Visual check running…', 'webchangedetector-for-mainwp' ),
 			// Reopen button shown next to the widget heading while the run popup is closed.
-			'reopenRunning'     => __( 'Updates running', 'webchangedetector-for-mainwp' ),
-			'keepOpenWarning'   => __( 'Please keep this popup open until the run finishes for a smooth update flow.', 'webchangedetector-for-mainwp' ),
+			'reopenRunning'      => __( 'Updates running', 'webchangedetector-for-mainwp' ),
+			'keepOpenWarning'    => __( 'Please keep this popup open until the run finishes for a smooth update flow.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of sites (singular). */
-			'metaErrorSingle'   => __( 'The checks for %d site could not be loaded. It would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
+			'metaErrorSingle'    => __( 'The checks for %d site could not be loaded. It would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
 			/* translators: %d: number of sites. */
-			'metaErrorPlural'   => __( 'The checks for %d sites could not be loaded. They would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
+			'metaErrorPlural'    => __( 'The checks for %d sites could not be loaded. They would be updated WITHOUT visual checks.', 'webchangedetector-for-mainwp' ),
+			// Updates-page bar: empty-selection guard + preflight badge for sites without visual checks.
+			'noSelection'        => __( 'Select at least one update first.', 'webchangedetector-for-mainwp' ),
+			'checksNotActivated' => __( 'Checks not activated', 'webchangedetector-for-mainwp' ),
 		);
 	}
 }
